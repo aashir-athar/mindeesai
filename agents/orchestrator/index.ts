@@ -63,6 +63,7 @@ import { updateSentimentArc } from "@/lib/persona/sentiment-arc";
 import { updateRhythm } from "@/lib/persona/rhythm";
 import { recordInnerThought } from "@/lib/persona/inner-voice";
 import { bumpAffinity, readAffinities, engagementFromTurn } from "@/lib/persona/topic-affinity";
+import { readReachOut, reachOutNarrative } from "@/lib/persona/reach-out";
 import { neighbours } from "@/lib/memory/graph";
 import { isoNow, nid } from "@/lib/utils";
 import type { Citation, Message, ToolCall, RetrievalHit } from "@/lib/types";
@@ -217,6 +218,21 @@ export async function* orchestrate(opts: {
   }
   const affinities = await readAffinities().catch(() => []);
 
+  // Reach-out hint — if it's been a while since the last user message,
+  // a primed greeting may be available. Computed at cron time so this
+  // is a cheap read.
+  let reachOutHint = "";
+  try {
+    const lastUserMsg = [...thread].reverse().find((m) => m.role === "user");
+    if (lastUserMsg) {
+      const hoursSinceLast = (Date.now() - new Date(lastUserMsg.createdAt).getTime()) / 3_600_000;
+      if (hoursSinceLast >= 6) {
+        const ro = await readReachOut();
+        if (ro) reachOutHint = reachOutNarrative(ro, hoursSinceLast);
+      }
+    }
+  } catch { /* ignore */ }
+
   // 4e. If the user is correcting Mindees this turn, the previous assistant
   //     reply in this thread is the WRONG answer. Record the pair — it'll be
   //     surfaced as a "don't repeat this mistake" rail in future turns.
@@ -257,9 +273,12 @@ export async function* orchestrate(opts: {
   // older than the verbatim recent-turns slice into a few editorial
   // sentences. Effective infinite memory of THIS thread at constant cost.
   const summary = await getSummary(threadId).catch(() => null);
-  const memoryBlockPlus = summary
-    ? `${memoryBlock}\n\n## Where this conversation has been so far\n${summary.summary}`
-    : memoryBlock;
+  const memoryBlockPlus = [
+    summary
+      ? `${memoryBlock}\n\n## Where this conversation has been so far\n${summary.summary}`
+      : memoryBlock,
+    reachOutHint,
+  ].filter(Boolean).join("\n\n");
 
   const systemPrompt = buildMindeesSystemPrompt({
     mood,

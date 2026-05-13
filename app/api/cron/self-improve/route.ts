@@ -29,6 +29,7 @@ import { pickSelfCuriosityTopics } from "@/lib/research/self-curiosity";
 import { research } from "@/lib/research";
 import { setResearching, clearResearching } from "@/lib/research/status";
 import { maybeWriteJournalEntry } from "@/lib/persona/journal";
+import { composeReachOut } from "@/lib/persona/reach-out";
 
 export const runtime = "nodejs";
 export const maxDuration = 280; // up to ~5min on Vercel Pro; cron-job.org honours this
@@ -139,6 +140,15 @@ export async function POST(req: NextRequest) {
       journaled = entry !== null;
     } catch (e) {
       log.warn("journal stage failed", e);
+    }
+
+    // 4b. Compose the reach-out — what Mindees might say when the user
+    //     comes back after a gap. Cheap (no LLM call — just composition
+    //     from existing tensors).
+    try {
+      await composeReachOut();
+    } catch (e) {
+      log.warn("reach-out compose failed", e);
     }
 
     // 5. Flush LanceDB snapshot to Vercel Blob (no-op for MEMORY_PERSISTENCE != "vercel-blob")
