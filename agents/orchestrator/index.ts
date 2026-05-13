@@ -64,6 +64,7 @@ import { updateRhythm } from "@/lib/persona/rhythm";
 import { recordInnerThought } from "@/lib/persona/inner-voice";
 import { bumpAffinity, readAffinities, engagementFromTurn } from "@/lib/persona/topic-affinity";
 import { readReachOut, reachOutNarrative } from "@/lib/persona/reach-out";
+import { readNeuralEmotion, blendNeuralIntoCues } from "@/lib/persona/affect-neural";
 import { neighbours } from "@/lib/memory/graph";
 import { isoNow, nid } from "@/lib/utils";
 import type { Citation, Message, ToolCall, RetrievalHit } from "@/lib/types";
@@ -102,8 +103,16 @@ export async function* orchestrate(opts: {
   };
   await appendMessage(threadId, userTurn);
 
-  // 2. Read affect + empathy → update all per-turn tensors in parallel
-  const affect = readAffect(userMessage);
+  // 2. Read affect + empathy → update all per-turn tensors in parallel.
+  //    Affect is the rule-based read; we ALSO try a neural read (transformers.js,
+  //    Xenova/emotion-english-distilroberta-base) and blend it in. Neural is
+  //    bounded by a 2.5s timeout and falls back silently to rule-based-only
+  //    so cold serverless can't stall the chat path.
+  const affectRule = readAffect(userMessage);
+  const neuralEmotion = await readNeuralEmotion(userMessage).catch(() => null);
+  const affect = neuralEmotion
+    ? { ...affectRule, cues: blendNeuralIntoCues(affectRule.cues, neuralEmotion) }
+    : affectRule;
   const empathy = readEmpathy(userMessage, affect);
   const [mood, userModelPrev, relPrev, goal] = await Promise.all([
     updateMood(affect),
