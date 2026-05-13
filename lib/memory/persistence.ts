@@ -159,6 +159,7 @@ export async function persistPersonaQuick(): Promise<void> {
     path.join(DATA_DIR, "corrections.jsonl"),
     path.join(DATA_DIR, "auto-research-log.jsonl"),
     path.join(DATA_DIR, "delights.jsonl"),
+    path.join(DATA_DIR, "cron-heartbeat.jsonl"),
     path.join(DATA_DIR, "sentiment-arc.json"),
     path.join(DATA_DIR, "topic-affinity.json"),
     path.join(DATA_DIR, "runtime-flags.json"),

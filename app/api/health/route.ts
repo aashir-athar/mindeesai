@@ -31,6 +31,20 @@ export async function GET() {
     lastImprovement = JSON.parse(lines[lines.length - 1] ?? "null");
   } catch { /* no log yet */ }
 
+  // Cron heartbeat — written at the START of every cron invocation, before
+  // any work runs. If lastImprovement is null but lastHeartbeat is recent,
+  // the cron IS firing but failing/timing out mid-step. If both are null,
+  // the cron has never hit the endpoint at all (config problem on
+  // cron-job.org, wrong URL, paused job, etc.).
+  let lastHeartbeat: unknown = null;
+  let heartbeatCount = 0;
+  try {
+    const raw = await readFile(dataPath("cron-heartbeat.jsonl"), "utf8");
+    const lines = raw.trim().split("\n").filter(Boolean);
+    heartbeatCount = lines.length;
+    lastHeartbeat = JSON.parse(lines[lines.length - 1] ?? "null");
+  } catch { /* no heartbeats yet */ }
+
   // Training metrics tail
   let lastTrainingTick: unknown = null;
   try {
@@ -76,6 +90,18 @@ export async function GET() {
     },
     cron: {
       configured: !!env.CRON_SECRET,
+      /**
+       * Diagnostic ladder:
+       *   heartbeatCount === 0          → cron has NEVER reached endpoint
+       *                                     (check cron-job.org config)
+       *   lastHeartbeat recent + null
+       *      lastImprovement            → cron is firing but timing out
+       *                                     mid-step (reduce budget /
+       *                                     diagnose Vercel function logs)
+       *   lastImprovement recent        → cron is fully working
+       */
+      heartbeatCount,
+      lastHeartbeat,
       lastImprovement,
       lastTrainingTick,
     },

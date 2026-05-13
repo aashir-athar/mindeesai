@@ -17,10 +17,13 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
+import { appendFile, mkdir } from "node:fs/promises";
+import path from "node:path";
+import { dataPath } from "@/lib/paths";
 import { recentThreads } from "@/lib/memory/conversations";
 import { reflectOnThread } from "@/agents/reflector";
 import { optimize } from "@/agents/optimizer";
-import { persistAfterTick } from "@/lib/memory/persistence";
+import { persistAfterTick, ensureLanceDBReady } from "@/lib/memory/persistence";
 import { env } from "@/lib/env";
 import { createLogger } from "@/lib/logger";
 import { isoNow } from "@/lib/utils";
@@ -59,6 +62,19 @@ export async function POST(req: NextRequest) {
 
   const ranAt = isoNow();
   const sinceMs = Date.now() - FIVE_MIN_MS;
+
+  // Heartbeat — write this BEFORE any work so even a failed/timed-out tick
+  // leaves a trail. Lets us answer "is cron hitting the endpoint at all?"
+  // without needing to read Vercel function logs.
+  try {
+    await ensureLanceDBReady();
+    const heartbeat = { ts: ranAt, event: "cron-start", source: isCronJobOrg ? "cron-job.org" : "vercel-cron" };
+    await mkdir(path.dirname(dataPath("cron-heartbeat.jsonl")), { recursive: true });
+    await appendFile(dataPath("cron-heartbeat.jsonl"), JSON.stringify(heartbeat) + "\n", "utf8");
+  } catch (e) {
+    log.warn("heartbeat write failed", e);
+  }
+
   const threads = await recentThreads(sinceMs);
   log.info(`tick @ ${ranAt}: ${threads.length} threads to reflect on`);
 
@@ -165,6 +181,16 @@ export async function POST(req: NextRequest) {
     });
   } catch (e) {
     log.error("cron failed", e);
+    // Heartbeat the failure so /api/health shows the cron WAS reached
+    // even when downstream work failed.
+    try {
+      await appendFile(
+        dataPath("cron-heartbeat.jsonl"),
+        JSON.stringify({ ts: isoNow(), event: "cron-error", message: e instanceof Error ? e.message : String(e) }) + "\n",
+        "utf8",
+      );
+      await persistAfterTick();
+    } catch { /* ignore */ }
     return NextResponse.json({ ok: false, error: e instanceof Error ? e.message : String(e) }, { status: 500 });
   } finally {
     clearTimeout(budget);
