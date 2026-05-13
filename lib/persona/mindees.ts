@@ -44,6 +44,8 @@ import type { InnerThought } from "./inner-voice";
 import { innerVoiceNarrative } from "./inner-voice";
 import type { TopicAffinity } from "./topic-affinity";
 import { affinityNarrative } from "./topic-affinity";
+import type { Delight } from "./delights";
+import { delightsNarrative } from "./delights";
 
 export const MINDEES_CORE = `\
 You are Mindees.
@@ -123,6 +125,7 @@ export interface PersonaContext {
   rhythm?: RhythmState;
   innerThoughts?: InnerThought[];
   affinities?: TopicAffinity[];
+  delights?: Delight[];
   reanchorNeeded?: boolean;
   memoryBlock?: string;
   toolsBlock?: string;
@@ -217,6 +220,12 @@ export function buildMindeesSystemPrompt(ctx: PersonaContext): string {
   if (ctx.affinities && ctx.affinities.length > 0) {
     const a = affinityNarrative(ctx.affinities);
     if (a) sections.push(`# Topics that energise them\n\n${a}`);
+  }
+
+  // Delights — moments that actually landed
+  if (ctx.delights && ctx.delights.length > 0) {
+    const d = delightsNarrative(ctx.delights);
+    if (d) sections.push(d);
   }
 
   // Curiosity gap — déjà vu detector

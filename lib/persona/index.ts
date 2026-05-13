@@ -112,3 +112,13 @@ export {
   affinityNarrative,
   type TopicAffinity,
 } from "./topic-affinity";
+
+// v0.2.9 — delights (callback-able warm moments)
+export {
+  detectDelight,
+  recordDelight,
+  callbackableDelights,
+  markRecalled,
+  delightsNarrative,
+  type Delight,
+} from "./delights";

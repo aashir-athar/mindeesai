@@ -65,6 +65,7 @@ import { recordInnerThought } from "@/lib/persona/inner-voice";
 import { bumpAffinity, readAffinities, engagementFromTurn } from "@/lib/persona/topic-affinity";
 import { readReachOut, reachOutNarrative } from "@/lib/persona/reach-out";
 import { readNeuralEmotion, blendNeuralIntoCues } from "@/lib/persona/affect-neural";
+import { detectDelight, recordDelight, callbackableDelights } from "@/lib/persona/delights";
 import { neighbours } from "@/lib/memory/graph";
 import { isoNow, nid } from "@/lib/utils";
 import type { Citation, Message, ToolCall, RetrievalHit } from "@/lib/types";
@@ -227,6 +228,21 @@ export async function* orchestrate(opts: {
   }
   const affinities = await readAffinities().catch(() => []);
 
+  // Delights — moments that landed. Detect if THIS user message is
+  // landing-feedback on the PRIOR assistant reply, and read the
+  // callback-able backlog for the system prompt.
+  const priorAssistantReply = [...thread].reverse().find((m) => m.role === "assistant");
+  if (priorAssistantReply) {
+    const delight = detectDelight({
+      threadId,
+      priorMindeesReply: priorAssistantReply.content,
+      userResponse: userMessage,
+      affect,
+    });
+    if (delight) void recordDelight(delight).catch(() => {});
+  }
+  const delights = await callbackableDelights(3).catch(() => []);
+
   // Reach-out hint — if it's been a while since the last user message,
   // a primed greeting may be available. Computed at cron time so this
   // is a cheap read.
@@ -308,6 +324,7 @@ export async function* orchestrate(opts: {
     rhythm,
     innerThoughts,
     affinities,
+    delights,
     reanchorNeeded,
     memoryBlock: memoryBlockPlus,
     toolsBlock,
