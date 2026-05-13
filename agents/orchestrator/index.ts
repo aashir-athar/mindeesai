@@ -12,6 +12,11 @@
  */
 
 import { streamLLM } from "@/lib/llm/router";
+import { generateTextStream } from "@/core/mindees-mind";
+import { env } from "@/lib/env";
+import { existsSync } from "node:fs";
+import { checkpointPath } from "@/lib/paths";
+import type { LLMRequest, LLMStreamChunk } from "@/lib/types";
 import { getRegistry, runConnector, listTools } from "@/lib/connectors/loader";
 import { buildContext } from "@/lib/connectors/context";
 import {
@@ -202,7 +207,14 @@ export async function* orchestrate(opts: {
   const tools = await listTools();
   const history: Message[] = [...thread, userTurn].slice(-13);
 
-  // 7. Tool-call loop
+  // 7. Decide which brain serves this turn — native vs cloud bootstrap.
+  //    The native model needs BOTH the USE_NATIVE_MODEL flag AND a checkpoint
+  //    that has actually been loaded (otherwise we'd serve random-weight noise).
+  const useNative = env.USE_NATIVE_MODEL && existsSync(checkpointPath("base.bin"));
+  const inferenceFn: (req: LLMRequest) => AsyncIterable<LLMStreamChunk> = useNative
+    ? makeNativeInferenceAdapter()
+    : streamLLM;
+
   let aggregatedText = "";
   const citations: Citation[] = [];
   let conversation: Message[] = history;
@@ -215,7 +227,7 @@ export async function* orchestrate(opts: {
     let pendingBuf = ""; // buffer for in-stream tool-call leak detection
     const pendingTools: ToolCall[] = [];
 
-    for await (const chunk of streamLLM({
+    for await (const chunk of inferenceFn({
       modelId,
       messages: conversation,
       system: systemPrompt,
@@ -516,6 +528,45 @@ function pendingToolsForCorpus(citations: Citation[]): string[] {
     if (c.source === "web") out.add("web-search");
   }
   return [...out];
+}
+
+/**
+ * Adapter: turn the native model's `generateTextStream(prompt)` into the same
+ * shape `streamLLM` returns. We collapse the chat history + system prompt into
+ * a single prompt string using the chat template the model is trained on.
+ *
+ * Tool calls aren't supported on this path yet — the native model would need
+ * to be trained on the structured-tool protocol first. For now it serves
+ * pure text generation; tool-using turns fall back to streamLLM via the
+ * orchestrator's hop loop catching pendingTools = [].
+ */
+function makeNativeInferenceAdapter(): (req: LLMRequest) => AsyncIterable<LLMStreamChunk> {
+  return async function* nativeStream(req: LLMRequest) {
+    const parts: string[] = [];
+    if (req.system) parts.push(`<system>${req.system}</system>`);
+    for (const m of req.messages.slice(-12)) {
+      if (m.role === "user") parts.push(`<user>${m.content}</user>`);
+      else if (m.role === "assistant") parts.push(`<assistant>${m.content}</assistant>`);
+      else if (m.role === "tool") parts.push(`<tool-result>${m.content}</tool-result>`);
+    }
+    parts.push("<assistant>");
+    const prompt = parts.join("\n");
+
+    let tokens = 0;
+    for await (const piece of generateTextStream(prompt, {
+      maxTokens: req.maxTokens ?? 768,
+      temperature: req.temperature ?? 0.7,
+      topP: 0.95,
+      stop: ["</assistant>", "<|endoftext|>"],
+      signal: req.signal,
+    })) {
+      if (piece) {
+        tokens++;
+        yield { type: "text", text: piece, tokens };
+      }
+    }
+    yield { type: "finish", tokens };
+  };
 }
 
 function formatMemoryBlock(
