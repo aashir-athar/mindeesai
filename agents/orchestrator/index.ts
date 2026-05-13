@@ -37,7 +37,11 @@ import {
   recordDriftFromReply,
   predictReward,
   buildMindeesSystemPrompt,
+  getGoal,
+  updateGoal,
+  extractAndPersistTriples,
 } from "@/lib/persona";
+import { neighbours } from "@/lib/memory/graph";
 import { isoNow, nid } from "@/lib/utils";
 import type { Citation, Message, ToolCall, RetrievalHit } from "@/lib/types";
 import { createLogger } from "@/lib/logger";
@@ -75,10 +79,11 @@ export async function* orchestrate(opts: {
 
   // 2. Read affect → update all per-turn tensors in parallel
   const affect = readAffect(userMessage);
-  const [mood, userModelPrev, relPrev] = await Promise.all([
+  const [mood, userModelPrev, relPrev, goal] = await Promise.all([
     updateMood(affect),
     getUserModel(threadId),
     getRelationship(threadId),
+    getGoal(threadId),
   ]);
 
   // Running average user-message length, used by the user model
@@ -130,6 +135,10 @@ export async function* orchestrate(opts: {
   // 4. Aggregate reward signal from historical thumbs (cached)
   const reward = await predictReward();
 
+  // 4b. Pull graph facts known about the user — fast JSON read
+  const youFacts = await neighbours("you", 1).catch(() => []);
+  const graphFacts = youFacts.slice(0, 8);
+
   // 5. Get the prior drift state so we can re-anchor if needed
   //    (we check the state from the PREVIOUS reply — the new reply will be
   //    measured at end-of-turn and stored for next time)
@@ -158,6 +167,8 @@ export async function* orchestrate(opts: {
     relationship: relationshipNext,
     curiosity,
     reward,
+    goal,
+    graphFacts,
     reanchorNeeded,
     memoryBlock,
     toolsBlock,
@@ -278,6 +289,19 @@ export async function* orchestrate(opts: {
   ]).catch((e) => log.warn("memory write failed", e));
 
   void recordDriftFromReply(finalAssistant.content);
+
+  // Update the GOAL tensor + extract knowledge-graph triples after the reply.
+  // Both fire-and-forget so they don't delay the user-visible response, but
+  // they run while the stream tail is still open so they have time to finish.
+  void updateGoal({
+    threadId,
+    recentUserMessage: userMessage,
+    recentAssistantReply: finalAssistant.content,
+  }).catch((e) => log.warn("goal update failed", e));
+  void extractAndPersistTriples({
+    userMessage,
+    assistantReply: finalAssistant.content,
+  }).catch((e) => log.warn("kg extract failed", e));
 
   // Thread metadata: titled on first turn, lastActivity bumped every turn
   const priorMeta = await getMeta(threadId);

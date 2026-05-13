@@ -21,6 +21,9 @@ import { curiosityNarrative } from "./curiosity";
 import type { RewardEstimate } from "./reward";
 import { rewardNarrative } from "./reward";
 import { REANCHOR_INSTRUCTION } from "./drift";
+import type { GoalState } from "./goal";
+import { goalNarrative } from "./goal";
+import { allTriples, type Triple } from "@/lib/memory/graph";
 
 export const MINDEES_CORE = `\
 You are Mindees.
@@ -73,6 +76,8 @@ export interface PersonaContext {
   relationship?: Relationship;
   curiosity?: CuriosityGap;
   reward?: RewardEstimate;
+  goal?: GoalState;
+  graphFacts?: Triple[];
   reanchorNeeded?: boolean;
   memoryBlock?: string;
   toolsBlock?: string;
@@ -84,6 +89,12 @@ export function buildMindeesSystemPrompt(ctx: PersonaContext): string {
   // Internal state — Mindees-side
   sections.push(`# Your current internal state\n\n${moodNarrative(ctx.mood)}`);
 
+  // Goal orientation — keep us pointed at what we're trying to accomplish
+  if (ctx.goal) {
+    const g = goalNarrative(ctx.goal);
+    if (g) sections.push(`# Orientation\n\n${g}`);
+  }
+
   // External state — what Mindees has learned about THIS user + relationship
   const aboutThem: string[] = [];
   if (ctx.user) {
@@ -92,6 +103,10 @@ export function buildMindeesSystemPrompt(ctx: PersonaContext): string {
   }
   if (ctx.relationship) {
     aboutThem.push(relationshipNarrative(ctx.relationship));
+  }
+  if (ctx.graphFacts && ctx.graphFacts.length > 0) {
+    const facts = ctx.graphFacts.slice(0, 8).map((t) => `- ${t.subject} ${t.predicate.replace(/_/g, " ")} ${t.object}`).join("\n");
+    aboutThem.push(`Facts you've gathered about this user from past conversations:\n${facts}`);
   }
   if (aboutThem.length > 0) {
     sections.push(`# What you know about this user\n\n${aboutThem.join("\n\n")}`);

@@ -42,3 +42,12 @@ export {
   type DriftState,
 } from "./drift";
 export { predictReward, rewardNarrative, type RewardEstimate } from "./reward";
+
+// v0.2.3 — orientation + graph extraction
+export {
+  getGoal,
+  updateGoal,
+  goalNarrative,
+  type GoalState,
+} from "./goal";
+export { extractAndPersistTriples } from "./extract-triples";
