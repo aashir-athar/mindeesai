@@ -24,6 +24,9 @@ import { persistAfterTick } from "@/lib/memory/persistence";
 import { env } from "@/lib/env";
 import { createLogger } from "@/lib/logger";
 import { isoNow } from "@/lib/utils";
+import { pickCuriosityTopics, logAutoResearch } from "@/lib/research/auto-curiosity";
+import { research } from "@/lib/research";
+import { maybeWriteJournalEntry } from "@/lib/persona/journal";
 
 export const runtime = "nodejs";
 export const maxDuration = 280; // up to ~5min on Vercel Pro; cron-job.org honours this
@@ -75,7 +78,61 @@ export async function POST(req: NextRequest) {
     // 2. Optimize: promote insights + run gradient-descent training tick
     const result = await optimize(reflections, { sinceMs, signal: abortCtrl.signal });
 
-    // 3. Flush LanceDB snapshot to Vercel Blob (no-op for MEMORY_PERSISTENCE != "vercel-blob")
+    // 3. Autonomous research — find the topics Mindees has been most
+    //    uncertain about (corrections, low-confidence beliefs, hedge-heavy
+    //    replies) and go look them up. Persists passages as recallable
+    //    memories so next chat about that topic, Mindees has substance.
+    //    Strictly bounded — at most 3 topics per tick, half the budget.
+    const researchSummary: Array<{ topic: string; hits: number; passages: number; ok: boolean }> = [];
+    try {
+      const topics = await pickCuriosityTopics(3);
+      const researchBudget = setTimeout(() => abortCtrl.abort(new Error("research budget exceeded")), 90_000);
+      try {
+        for (const t of topics) {
+          if (abortCtrl.signal.aborted) break;
+          try {
+            const r = await research(t.topic, abortCtrl.signal);
+            const entry = { topic: t.topic, hits: r.hits.length, passages: r.passages.length, ok: true };
+            researchSummary.push(entry);
+            await logAutoResearch({
+              ts: isoNow(),
+              topic: t.topic,
+              reason: t.reason,
+              hits: r.hits.length,
+              passages: r.passages.length,
+              ok: true,
+            });
+          } catch (e) {
+            log.warn(`auto-research "${t.topic}" failed`, e);
+            researchSummary.push({ topic: t.topic, hits: 0, passages: 0, ok: false });
+            await logAutoResearch({
+              ts: isoNow(),
+              topic: t.topic,
+              reason: t.reason,
+              hits: 0,
+              passages: 0,
+              ok: false,
+            });
+          }
+        }
+      } finally {
+        clearTimeout(researchBudget);
+      }
+    } catch (e) {
+      log.warn("auto-research stage failed", e);
+    }
+
+    // 4. Self-journal — once every ~22h Mindees writes a private entry
+    //    to its own future self. Cheap (one small LLM call).
+    let journaled = false;
+    try {
+      const entry = await maybeWriteJournalEntry();
+      journaled = entry !== null;
+    } catch (e) {
+      log.warn("journal stage failed", e);
+    }
+
+    // 5. Flush LanceDB snapshot to Vercel Blob (no-op for MEMORY_PERSISTENCE != "vercel-blob")
     await persistAfterTick().catch((e) => log.warn("persist flush failed", e));
 
     return NextResponse.json({
@@ -83,6 +140,8 @@ export async function POST(req: NextRequest) {
       ranAt,
       threadsReflected: Math.min(threads.length, 10),
       reflectionsTotal: reflections.length,
+      autoResearch: researchSummary,
+      journaled,
       result,
     });
   } catch (e) {

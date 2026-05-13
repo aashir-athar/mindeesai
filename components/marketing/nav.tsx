@@ -31,9 +31,9 @@ export function Nav() {
 
         <div className="hidden md:flex items-center gap-8 text-sm text-bone-300">
           <NavLink href="/#how">How</NavLink>
-          <NavLink href="/#features">Features</NavLink>
           <NavLink href="/dashboard">Dashboard</NavLink>
           <NavLink href="/journal">Journal</NavLink>
+          <NavLink href="/research">Research</NavLink>
           <NavLink href="/memory-graph">Graph</NavLink>
         </div>
 

@@ -8,6 +8,7 @@
 import { env } from "@/lib/env";
 import { createLogger } from "@/lib/logger";
 import type { ResearchHit } from "@/lib/types";
+import { searchWikipedia, searchArxiv, searchDuckDuckGo } from "./providers-free";
 
 const log = createLogger("search");
 
@@ -78,10 +79,53 @@ async function searchExa(query: string, signal?: AbortSignal): Promise<ResearchH
   }
 }
 
-/** Returns the first non-empty provider's results. */
+/**
+ * Returns the first non-empty provider's results.
+ *
+ * Rotation order:
+ *   1. Tavily       (paid, best general web — when key present)
+ *   2. Exa          (paid, semantic-search — when key present)
+ *   3. DuckDuckGo   (FREE, generic web fallback — always available)
+ *   4. Wikipedia    (FREE, authoritative knowledge — always available)
+ *
+ * arXiv is exposed separately via searchAcademic() for queries where we
+ * know we want papers, not general web.
+ */
 export async function searchWeb(query: string, signal?: AbortSignal): Promise<ResearchHit[]> {
   if (!env.ENABLE_WEB_RESEARCH) return [];
   const tav = await searchTavily(query, signal);
-  if (tav.length > 0) return tav;
-  return searchExa(query, signal);
+  if (tav.length > 0) return tav.map((h) => ({ ...h, source: h.source ?? "tavily" }));
+  const exa = await searchExa(query, signal);
+  if (exa.length > 0) return exa.map((h) => ({ ...h, source: h.source ?? "exa" }));
+  const ddg = await searchDuckDuckGo(query, signal);
+  if (ddg.length > 0) return ddg;
+  return searchWikipedia(query, signal);
+}
+
+/** Multi-provider mixed search — pulls from all available providers in parallel. */
+export async function searchWebMixed(query: string, signal?: AbortSignal): Promise<ResearchHit[]> {
+  if (!env.ENABLE_WEB_RESEARCH) return [];
+  const [tav, exa, ddg, wiki] = await Promise.all([
+    searchTavily(query, signal).then((r) => r.map((h) => ({ ...h, source: "tavily" }))),
+    searchExa(query, signal).then((r) => r.map((h) => ({ ...h, source: "exa" }))),
+    searchDuckDuckGo(query, signal),
+    searchWikipedia(query, signal),
+  ]);
+  const all = [...tav, ...exa, ...ddg, ...wiki];
+  // Dedup by hostname+title
+  const seen = new Set<string>();
+  const dedup: ResearchHit[] = [];
+  for (const h of all) {
+    const k = `${new URL(h.url).hostname}::${h.title.toLowerCase().slice(0, 80)}`;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    dedup.push(h);
+  }
+  return dedup;
+}
+
+/** Academic-focused search — arXiv. Used when the topic looks research-y. */
+export async function searchAcademic(query: string, signal?: AbortSignal): Promise<ResearchHit[]> {
+  if (!env.ENABLE_WEB_RESEARCH) return [];
+  return searchArxiv(query, signal);
 }

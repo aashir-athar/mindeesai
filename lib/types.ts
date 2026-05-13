@@ -183,6 +183,8 @@ export type ResearchHit = {
   snippet: string;
   score?: number;
   publishedAt?: string;
+  /** Which provider returned this hit (tavily / exa / wikipedia / arxiv / duckduckgo / ...). */
+  source?: string;
 };
 
 export type CrawledPage = {
