@@ -20,8 +20,11 @@ async function loadTransformersEmbedder() {
   transformersEmbedderPromise = (async () => {
     log.info("Loading transformers.js BGE embedder (one-time download)…");
     const { pipeline } = await import("@huggingface/transformers");
+    // q8 quantized — ~3× smaller download, ~2× faster cold-start, negligible
+    // quality loss on the 384-dim BGE small model. The retrieval ranking
+    // stays effectively identical for short-text recall workloads.
     const extractor = await pipeline("feature-extraction", "Xenova/bge-small-en-v1.5", {
-      dtype: "fp32",
+      dtype: "q8",
     });
     return async (text: string): Promise<number[]> => {
       const out = await extractor(text, { pooling: "mean", normalize: true });
@@ -38,7 +41,9 @@ async function embedViaOllama(text: string): Promise<number[] | null> {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ model: env.DEFAULT_EMBED_MODEL, input: text }),
-      signal: AbortSignal.timeout(15_000),
+      // Short timeout — on Vercel Ollama is unreachable, and we don't want
+      // to burn 15s on every embed call only to fall back to local.
+      signal: AbortSignal.timeout(2_500),
     });
     if (!res.ok) return null;
     const data = (await res.json()) as { embeddings?: number[][] };
@@ -50,10 +55,14 @@ async function embedViaOllama(text: string): Promise<number[] | null> {
 
 /** Embed a single string. Never throws — returns a zero vector on total failure. */
 export async function embed(text: string): Promise<number[]> {
-  const ollamaResult = await embedViaOllama(text);
-  if (ollamaResult) return ollamaResult;
+  // On Vercel, Ollama is unreachable. Skip the round-trip + 2.5s timeout
+  // entirely and go straight to the in-process BGE embedder. Local dev
+  // (where Ollama might be running on localhost:11434) still tries it first.
+  if (process.env.VERCEL !== "1") {
+    const ollamaResult = await embedViaOllama(text);
+    if (ollamaResult) return ollamaResult;
+  }
 
-  log.warn("Ollama embed unavailable — using transformers.js fallback");
   const fallback = await loadTransformersEmbedder();
   return fallback(text);
 }

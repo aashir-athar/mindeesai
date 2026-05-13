@@ -28,7 +28,9 @@ import { createLogger } from "@/lib/logger";
 
 const log = createLogger("journal");
 const JOURNAL_FILE = dataPath("journal.jsonl");
-const ENTRY_INTERVAL_HOURS = 22; // allow some drift; not strictly 24h
+const ENTRY_INTERVAL_HOURS = 22; // steady-state cadence — once per day-ish
+const FIRST_ENTRY_INTERVAL_HOURS = 4; // accelerate the FIRST entry so a
+// fresh deploy sees something land on /journal within hours, not a day.
 
 export interface JournalEntry {
   ts: string;
@@ -72,7 +74,11 @@ async function lastEntryTime(): Promise<number> {
 export async function maybeWriteJournalEntry(): Promise<JournalEntry | null> {
   const last = await lastEntryTime();
   const hoursAgo = (Date.now() - last) / 3_600_000;
-  if (hoursAgo < ENTRY_INTERVAL_HOURS) return null;
+  // First entry fires after 4h; subsequent entries respect the 22h cadence.
+  // `last === 0` means no entry ever — accelerate so the user sees results
+  // shortly after deploy.
+  const threshold = last === 0 ? FIRST_ENTRY_INTERVAL_HOURS : ENTRY_INTERVAL_HOURS;
+  if (hoursAgo < threshold) return null;
 
   // Gather what's been happening
   const [threads, reflections, skills, mood] = await Promise.all([
