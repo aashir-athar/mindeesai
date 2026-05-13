@@ -104,7 +104,7 @@ export const ConnectorManifestSchema = z.object({
   parameters: z
     .object({
       type: z.literal("object"),
-      properties: z.record(z.any()),
+      properties: z.record(z.string(), z.any()),
       required: z.array(z.string()).optional(),
     })
     .passthrough(),

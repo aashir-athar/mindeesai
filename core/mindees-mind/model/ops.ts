@@ -113,7 +113,7 @@ export function rmsNormBackward(
       const dyi = dy.data[r * cols + c]!;
       const wi = weight.data[c]!;
       dX[r * cols + c] = wi * invRms * dyi - (xi * invRms * invRms * invRms * dot) / cols;
-      dW[c] += dyi * xi * invRms;
+      dW[c] = (dW[c] ?? 0) + dyi * xi * invRms;
     }
   }
   return { dX: new Tensor(dX, x.shape), dW: new Tensor(dW, weight.shape) };

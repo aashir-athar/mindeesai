@@ -12,14 +12,17 @@ import type { NextConfig } from "next";
 
 const config: NextConfig = {
   reactStrictMode: true,
+  // reactCompiler moved out of `experimental` in Next 16; leaving it off here so
+  // the build is portable across plain Next and the @next/babel-plugin-react-compiler
+  // setup. Enable later via a top-level `reactCompiler: true` once stable.
   experimental: {
-    reactCompiler: true,
-    ppr: "incremental",
+    // Partial Prerendering is now toggled via the top-level `cacheComponents`
+    // option in Next 16. We leave it off for now because it requires removing
+    // every `export const dynamic = "force-dynamic"` declaration from API routes.
+    // Re-enable later once routes are migrated to the new `'use cache'` model.
     serverActions: {
       bodySizeLimit: "10mb",
     },
-    // Keep server-component instrumentation lean
-    instrumentationHook: true,
   },
   images: {
     formats: ["image/avif", "image/webp"],

@@ -8,7 +8,7 @@
 import { trust } from "@/lib/psychology/trust";
 
 export function StageIndicator({ stage }: { stage: string }) {
-  let label = trust.thinking;
+  let label: string = trust.thinking;
   if (stage === "context") label = trust.retrieving;
   else if (stage === "thinking") label = trust.thinking;
   else if (stage.startsWith("tool:")) label = trust.toolPending(stage.slice(5));

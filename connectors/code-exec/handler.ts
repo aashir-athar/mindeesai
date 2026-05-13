@@ -37,7 +37,7 @@ const handler: ConnectorHandler<Args> = async (args) => {
 
   try {
     const context = vm.createContext(sandbox, { codeGeneration: { strings: false, wasm: false } });
-    const script = new vm.Script(`(()=>{ ${code} })()`, { displayErrors: true });
+    const script = new vm.Script(`(()=>{ ${code} })()`);
     const result = script.runInContext(context, { timeout: TIMEOUT_MS, breakOnSigint: true });
     const text = JSON.stringify(result, null, 2) ?? String(result);
     return {

@@ -8,8 +8,9 @@ import { env } from "@/lib/env";
 const fraunces = Fraunces({
   subsets: ["latin"],
   variable: "--font-display",
-  weight: ["300", "400", "500"],
+  // Fraunces is a variable font — `axes` requires no fixed weights.
   axes: ["SOFT", "WONK"],
+  display: "swap",
 });
 
 export const metadata: Metadata = {

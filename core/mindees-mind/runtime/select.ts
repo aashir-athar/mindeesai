@@ -23,10 +23,9 @@ export async function selectBackend(): Promise<Backend> {
   if (resolved) return resolved;
   // WebGPU
   try {
-    // @ts-expect-error — navigator.gpu is browser-only
-    if (typeof navigator !== "undefined" && navigator.gpu) {
-      // @ts-expect-error — same
-      const adapter = await navigator.gpu.requestAdapter();
+    const nav = (typeof navigator !== "undefined" ? (navigator as unknown as { gpu?: { requestAdapter: () => Promise<unknown> } }) : undefined);
+    if (nav?.gpu) {
+      const adapter = await nav.gpu.requestAdapter();
       if (adapter) {
         resolved = "webgpu";
         log.info("backend: webgpu");

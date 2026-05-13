@@ -83,7 +83,7 @@ export async function POST(req: NextRequest) {
       ranAt,
       threadsReflected: Math.min(threads.length, 10),
       reflectionsTotal: reflections.length,
-      ...result,
+      result,
     });
   } catch (e) {
     log.error("cron failed", e);

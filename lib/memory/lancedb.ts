@@ -26,9 +26,10 @@ import type { MemoryRecord, RetrievalHit } from "@/lib/types";
 const log = createLogger("lancedb");
 
 type LancedbModule = typeof import("@lancedb/lancedb");
+type LanceConnection = Awaited<ReturnType<LancedbModule["connect"]>>;
 
 let dbPromise: Promise<{
-  connect: ReturnType<LancedbModule["connect"]>;
+  connect: LanceConnection;
   lib: LancedbModule;
 }> | null = null;
 
