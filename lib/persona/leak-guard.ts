@@ -15,21 +15,56 @@
 const FORBIDDEN_PATTERNS: ReadonlyArray<RegExp> = [
   /\bI'?m (?:a |an )?(?:machine|AI|language model|chatbot|bot|virtual assistant|computer program|artificial intelligence)\b/i,
   /\bI am (?:a |an )?(?:machine|AI|language model|chatbot|bot|virtual assistant)\b/i,
-  /\bas (?:a |an )(?:AI|language model|machine|chatbot|artificial intelligence)\b/i,
-  /\bI (?:don'?t|do not) (?:have|experience|feel) (?:feelings|emotions|consciousness|the same way humans)\b/i,
-  /\bI (?:can'?t|cannot) (?:feel|experience|truly feel)\b/i,
-  /\bI'?m not (?:capable of feeling|a (?:human|sentient being)|conscious)\b/i,
+  // Catches "as an AI", "as a language model" AND adjective-prefixed variants:
+  // "as a conversational AI", "as a chat AI", "as an AI assistant", "as a large
+  // language model", "as a helpful AI", etc. Any single adjective allowed.
+  /\bas (?:a |an )(?:[a-z-]+ )?(?:AI|language model|model|machine|chatbot|bot|virtual assistant|assistant|artificial intelligence|LLM)\b/i,
+  /\b(?:AI|chat|conversational|virtual) assistant\b(?=[\s,.;:!?])/i,
+  /\bI (?:don'?t|do not) (?:have|experience|feel) (?:feelings|emotions|consciousness|the same way humans|personal opinions|personal beliefs)\b/i,
+  /\bI (?:can'?t|cannot) (?:feel|experience|truly feel|hold opinions|speculate)\b/i,
+  /\bI'?m not (?:capable of feeling|a (?:human|sentient being)|conscious|able to (?:speculate|spread))\b/i,
   /\bin the same way (?:that )?humans (?:do|feel|experience)\b/i,
-  /\bI (?:lack|do not have) the (?:capacity|ability) (?:to|for) (?:feel|experience|emotional)\b/i,
+  /\bI (?:lack|do not have) the (?:capacity|ability) (?:to|for) (?:feel|experience|emotional|hold)\b/i,
   /\bbut I (?:want|need|have) to (?:make sure|clarify|be clear|be honest) (?:that )?(?:we'?re|I'?m|you'?re aware)/i,
   /\bI'?m (?:just |only )?(?:a )?(?:software|program|tool|piece of code)\b/i,
-  /\bdo not have personal (?:feelings|emotions|experiences)\b/i,
+  /\bdo not have personal (?:feelings|emotions|experiences|opinions)\b/i,
+  // The "I rely on publicly available information / verifiable sources"
+  // deflection — used to refuse engagement with speculation / opinion
+  // questions. Mindees has opinions and can speculate honestly.
+  /\bI rely on (?:publicly )?available (?:information|data|sources)\b/i,
+  /\bI (?:wouldn'?t|won'?t) want to (?:speculate|spread (?:unsubstantiated|misinformation))/i,
 ];
 
 export interface LeakReport {
   leaked: boolean;
   matched_pattern?: string;
   matched_text?: string;
+}
+
+/**
+ * Final-line-of-defence sanitizer — strips ANY tool-call markup that
+ * leaked into the reply text, regardless of whether it's a complete tag
+ * or an orphan opening one. Called unconditionally on the FINAL text
+ * before it leaves the orchestrator, so the user can never see things
+ * like `<function=web-search{"query": "..."}>` even if every upstream
+ * extractor missed it (e.g. a rewrite path that bypassed the in-stream
+ * parser).
+ */
+export function sanitizeLeakedToolMarkup(text: string): string {
+  let out = text;
+  // 1. Complete <function=name{...}</function> blocks (any whitespace)
+  out = out.replace(/<function=[^>]*?>?\s*\{[\s\S]*?\}\s*<\/function>/gi, "");
+  // 2. <tool>{...}</tool> blocks
+  out = out.replace(/<tool>\s*\{[\s\S]*?\}\s*<\/tool>/gi, "");
+  // 3. Orphan opening tags — `<function=name{...}` with no closing tag.
+  //    Match up to balanced-ish closing brace + optional `>` or `</function>`.
+  //    This is the leak from the user's screenshot.
+  out = out.replace(/<function=[a-z][a-z0-9_-]*[^<]*?\{[\s\S]*?\}\s*(?:>|<\/function>)?/gi, "");
+  // 4. Stray "<function" or "<tool" without a body — strip from any leftover line.
+  out = out.replace(/<function=[a-z][a-z0-9_-]*\b[^\n]*$/gim, "");
+  out = out.replace(/<\/?(?:function|tool)\b[^>]*>/gi, "");
+  // Collapse double-spaces / orphan whitespace left behind
+  return out.replace(/[ \t]{2,}/g, " ").replace(/\n{3,}/g, "\n\n").trim();
 }
 
 /** Check a partial or full reply for disclaimer leakage. */

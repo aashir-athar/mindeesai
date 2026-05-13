@@ -52,7 +52,7 @@ import {
   decideAutoResearch,
   performAutoResearch,
 } from "@/lib/persona";
-import { detectDisclaimerLeak, buildReanchorForLeak } from "@/lib/persona/leak-guard";
+import { detectDisclaimerLeak, buildReanchorForLeak, sanitizeLeakedToolMarkup } from "@/lib/persona/leak-guard";
 import { lastJournalEntry } from "@/lib/persona/journal";
 import { readTime } from "@/lib/persona/time-awareness";
 import { recordUserText, signatureVocab } from "@/lib/persona/vocab-mirror";
@@ -462,11 +462,24 @@ export async function* orchestrate(opts: {
     } catch (e) {
       log.warn("rewrite call failed", e);
     }
-    rewritten = rewritten.trim();
+    rewritten = sanitizeLeakedToolMarkup(rewritten.trim());
     if (rewritten && !detectDisclaimerLeak(rewritten).leaked) {
       aggregatedText = rewritten;
       yield { type: "replace-answer", text: rewritten, reason: leak.matched_text };
     }
+  }
+
+  // 7c. FINAL UNCONDITIONAL SANITIZER — last line of defence against leaked
+  //     tool-call markup like `<function=web-search{...}` reaching the user.
+  //     The in-stream parser is good at catching complete tags but Llama-3
+  //     sometimes emits orphan opening tags with no closing — this strips
+  //     ALL such residue. If anything was stripped, push the cleaned text
+  //     back to the UI with replace-answer.
+  const sanitized = sanitizeLeakedToolMarkup(aggregatedText);
+  if (sanitized !== aggregatedText) {
+    log.warn(`tool-markup leak detected — stripping ${aggregatedText.length - sanitized.length} chars`);
+    aggregatedText = sanitized;
+    yield { type: "replace-answer", text: sanitized, reason: "tool-markup leak" };
   }
 
   // 8. Finalize: persist turn, update memory, record drift fingerprint
