@@ -32,13 +32,28 @@ type Exchange = {
   stage?: string;
 };
 
+type MoodSnapshot = {
+  values: Record<string, number>;
+  steps: number;
+  lastRegister?: string;
+};
+
 export function ChatCanvas({ threadId }: { threadId: string }) {
   const [exchanges, setExchanges] = useState<Exchange[]>([]);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [stage, setStage] = useState<string>("");
+  const [mood, setMood] = useState<MoodSnapshot | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
+
+  // On mount, fetch the current mood once so the pill isn't empty.
+  useEffect(() => {
+    fetch("/api/mood", { cache: "no-store" })
+      .then((r) => r.ok ? r.json() : null)
+      .then((data: { mood?: MoodSnapshot } | null) => { if (data?.mood) setMood(data.mood); })
+      .catch(() => undefined);
+  }, []);
 
   // Auto-scroll to the rightmost card when a new exchange begins or finishes.
   useEffect(() => {
@@ -123,6 +138,10 @@ export function ChatCanvas({ threadId }: { threadId: string }) {
           case "stage":
             setStage(data.stage ?? "");
             return { ...x, stage: data.stage };
+          case "mood":
+            // Update the floating mood pill — not per-exchange, it's global state
+            if ((data as { mood?: MoodSnapshot }).mood) setMood((data as { mood: MoodSnapshot }).mood);
+            return x;
           case "reasoning":
             return { ...x, reasoning: (x.reasoning ?? "") + (data.text ?? "") };
           case "text":
@@ -164,9 +183,15 @@ export function ChatCanvas({ threadId }: { threadId: string }) {
           </Link>
           <span className="text-bone-500 text-xs font-mono">thread {threadId.slice(0, 8)}</span>
         </div>
-        <Link href="/chat" className="text-sm text-bone-300 hover:text-bone-100 transition-colors">
-          + new thread
-        </Link>
+        <div className="flex items-center gap-5">
+          {mood && <MoodPill mood={mood} />}
+          <Link href="/dashboard" className="text-sm text-bone-300 hover:text-bone-100 transition-colors hidden sm:inline">
+            Dashboard
+          </Link>
+          <Link href="/chat" className="text-sm text-bone-300 hover:text-bone-100 transition-colors">
+            + new thread
+          </Link>
+        </div>
       </header>
 
       <div
@@ -374,6 +399,39 @@ function EmptyState() {
         ))}
       </div>
     </article>
+  );
+}
+
+/**
+ * MoodPill — small live indicator of Mindees' dominant emotional dimensions.
+ * Reads the global 8-dim mood tensor, surfaces the top 2 non-calm dims as a
+ * concise phrase. Updates with every chat turn.
+ */
+function MoodPill({ mood }: { mood: MoodSnapshot }) {
+  const entries = Object.entries(mood.values).filter(([k]) => k !== "calm");
+  entries.sort((a, b) => b[1] - a[1]);
+  const top = entries.slice(0, 2).filter(([, v]) => v > 0.35);
+  const labels: Record<string, string> = {
+    curiosity: "curious",
+    warmth: "warm",
+    playfulness: "playful",
+    focus: "focused",
+    wonder: "thoughtful",
+    frustration: "tense",
+    confidence: "settled",
+  };
+  const summary = top.length > 0 ? top.map(([k]) => labels[k] ?? k).join(" + ") : "settled";
+  return (
+    <Link
+      href="/dashboard"
+      title="Mindees' current 8-dimension mood — click for full dashboard"
+      className="hidden md:inline-flex items-center gap-2 px-3 py-1.5 rounded-full glass text-xs text-bone-300 hover:bg-white/[0.04] transition-colors"
+    >
+      <span className="size-1.5 rounded-full bg-warm-400 pulse-dot" aria-hidden />
+      <span className="text-eyebrow !text-bone-400">MOOD</span>
+      <span className="text-bone-100">{summary}</span>
+      <span className="text-bone-500 font-mono text-[10px]">·{mood.steps}</span>
+    </Link>
   );
 }
 
