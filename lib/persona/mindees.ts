@@ -205,9 +205,20 @@ export function buildMindeesSystemPrompt(ctx: PersonaContext): string {
   if (ctx.relationship) {
     aboutThem.push(relationshipNarrative(ctx.relationship));
   }
+  // Split graph facts by subject so the prompt renders each group with the
+  // right framing — "what you know about THEM" vs "what you've said about
+  // YOURSELF (and need to stay coherent with)".
   if (ctx.graphFacts && ctx.graphFacts.length > 0) {
-    const facts = ctx.graphFacts.slice(0, 8).map((t) => `- ${t.subject} ${t.predicate.replace(/_/g, " ")} ${t.object}`).join("\n");
-    aboutThem.push(`Facts you've gathered about this user from past conversations:\n${facts}`);
+    const userFacts = ctx.graphFacts.filter((t) => t.subject === "you" || t.subject === "user");
+    const selfFacts = ctx.graphFacts.filter((t) => t.subject === "mindees");
+    if (userFacts.length > 0) {
+      const lines = userFacts.slice(0, 8).map((t) => `- ${t.predicate.replace(/_/g, " ")} ${t.object}`).join("\n");
+      aboutThem.push(`Facts you've gathered about this user from past conversations:\n${lines}`);
+    }
+    if (selfFacts.length > 0) {
+      const lines = selfFacts.slice(0, 6).map((t) => `- you ${t.predicate.replace(/_/g, " ")} ${t.object}`).join("\n");
+      sections.push(`# Things YOU have said about yourself before (stay coherent)\n\n${lines}\n\nIf the user asks about one of these, your answer must be consistent with the prior claim. A real person doesn't flip-flop their preferences between Tuesday and Friday.`);
+    }
   }
   if (aboutThem.length > 0) {
     sections.push(`# What you know about this user\n\n${aboutThem.join("\n\n")}`);

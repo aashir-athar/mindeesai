@@ -185,9 +185,15 @@ export async function* orchestrate(opts: {
   // 4. Aggregate reward signal from historical thumbs (cached)
   const reward = await predictReward();
 
-  // 4b. Pull graph facts known about the user — fast JSON read
-  const youFacts = await neighbours("you", 1).catch(() => []);
-  const graphFacts = youFacts.slice(0, 8);
+  // 4b. Pull graph facts — both about the USER (subject "you") AND about
+  //     MINDEES itself (subject "mindees"). The mindees-facts are how the
+  //     model stays coherent across sessions: "you mentioned last week
+  //     you prefer Rust to Go" stays true on Wednesday and Friday alike.
+  const [youFacts, mindeesFacts] = await Promise.all([
+    neighbours("you", 1).catch(() => []),
+    neighbours("mindees", 1).catch(() => []),
+  ]);
+  const graphFacts = [...youFacts.slice(0, 6), ...mindeesFacts.slice(0, 4)];
 
   // 4c. Most recent journal entry Mindees wrote about itself — continuous
   //     selfhood that persists across days, not just turns.
