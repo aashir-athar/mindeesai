@@ -14,8 +14,9 @@
 
 import { readFile, readdir, mkdir } from "node:fs/promises";
 import path from "node:path";
+import { dataPath } from "@/lib/paths";
 
-const FEEDBACK_DIR = path.join(process.cwd(), "data", "feedback");
+const FEEDBACK_DIR = dataPath("feedback");
 
 export type ThumbEvent = {
   threadId: string;

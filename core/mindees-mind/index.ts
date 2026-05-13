@@ -16,6 +16,7 @@
 
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { tokenizerPath, checkpointPath, dataPath } from "@/lib/paths";
 import { loadConfig, paramCount, activeParams, type ModelConfig } from "./model/config";
 import { initModel, type ModelWeights } from "./model/transformer";
 import { generate, generateStream, type GenerateOpts } from "./inference/engine";
@@ -43,10 +44,10 @@ async function init(): Promise<{ model: ModelWeights; tokenizer: BpeTokenizer; c
   log.info(`booting mindees: variant=${cfg.variant} params=${(paramCount(cfg) / 1e6).toFixed(1)}M active=${(activeParams(cfg) / 1e6).toFixed(1)}M`);
   log.info(`features: MoE=${cfg.useMoE}(${cfg.numExperts}x${cfg.expertsPerToken}) MLA=${cfg.useMLA}(latent=${cfg.mlaLatentDim}) MTP=${cfg.useMTP}(depth=${cfg.mtpDepth}) µP=${cfg.useMuP} reasoning=${cfg.useReasoning}`);
 
-  const tokenizerPath = path.join(process.cwd(), "tokenizer", "tokenizer.json");
+  const tokenizerFile = tokenizerPath("tokenizer.json");
   let tokenizer: BpeTokenizer;
   try {
-    const raw = await readFile(tokenizerPath, "utf8");
+    const raw = await readFile(tokenizerFile, "utf8");
     tokenizer = loadTokenizer(JSON.parse(raw));
     log.info(`tokenizer loaded: ${tokenizer.vocabSize} tokens`);
   } catch {
@@ -57,7 +58,7 @@ async function init(): Promise<{ model: ModelWeights; tokenizer: BpeTokenizer; c
   const model = initModel(cfg);
 
   try {
-    await readFile(path.join(process.cwd(), "checkpoints", "lora-latest.bin"));
+    await readFile(checkpointPath("lora-latest.bin"));
     log.info("LoRA checkpoint detected (deserialiser is a follow-up; weights remain freshly initialised)");
   } catch { /* none */ }
 
@@ -155,7 +156,7 @@ export async function selfImproveTick(opts: { sinceMs: number; signal?: AbortSig
   }
 
   try {
-    const prefs = await buildPreferencePairs({ conversationsDir: path.join(process.cwd(), "data", "conversations") });
+    const prefs = await buildPreferencePairs({ conversationsDir: dataPath("conversations") });
     for (const p of prefs) {
       batches.push({ tokens: tokenizer.encode(`${p.prompt}\n${p.chosen}`, { bos: true, eos: true }), source: "dpo-chosen" });
       batches.push({ tokens: tokenizer.encode(`${p.prompt}\n${p.rejected}`, { bos: true, eos: true }), source: "dpo-rejected" });

@@ -14,6 +14,7 @@
 
 import path from "node:path";
 import { mkdir, appendFile } from "node:fs/promises";
+import { dataPath } from "@/lib/paths";
 import { evaluatePerplexity } from "./benchmarks/perplexity";
 import { evaluateReasoning } from "./benchmarks/reasoning";
 import { evaluateRecall } from "./benchmarks/recall";
@@ -22,7 +23,7 @@ import type { BpeTokenizer } from "../tokenizer/bpe";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("eval-harness");
-const LOG = path.join(process.cwd(), "data", "eval-log.jsonl");
+const LOG = dataPath("eval-log.jsonl");
 
 export interface EvalSnapshot {
   ts: string;

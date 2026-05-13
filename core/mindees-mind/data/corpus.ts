@@ -9,9 +9,10 @@
 import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { SPECIAL_TOKENS, type BpeTokenizer } from "../tokenizer/bpe";
+import { dataPath } from "@/lib/paths";
 
-const CONVERSATIONS_DIR = path.join(process.cwd(), "data", "conversations");
-const REFLECTIONS_DIR = path.join(process.cwd(), "data", "reflections");
+const CONVERSATIONS_DIR = dataPath("conversations");
+const REFLECTIONS_DIR = dataPath("reflections");
 
 /** Encode one conversation as a token stream with chat-template specials. */
 export function encodeConversation(

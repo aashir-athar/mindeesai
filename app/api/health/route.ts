@@ -10,7 +10,7 @@ import { lancedbHealth } from "@/lib/memory/lancedb";
 import { getRegistry } from "@/lib/connectors/loader";
 import { env } from "@/lib/env";
 import { readFile } from "node:fs/promises";
-import path from "node:path";
+import { dataPath } from "@/lib/paths";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -24,7 +24,7 @@ export async function GET() {
   // Improvement log tail — proves the cron has been ticking
   let lastImprovement: unknown = null;
   try {
-    const raw = await readFile(path.join(process.cwd(), "data", "improvement-log.jsonl"), "utf8");
+    const raw = await readFile(dataPath("improvement-log.jsonl"), "utf8");
     const lines = raw.trim().split("\n").filter(Boolean);
     lastImprovement = JSON.parse(lines[lines.length - 1] ?? "null");
   } catch { /* no log yet */ }
@@ -32,7 +32,7 @@ export async function GET() {
   // Training metrics tail
   let lastTrainingTick: unknown = null;
   try {
-    const raw = await readFile(path.join(process.cwd(), "data", "training-metrics.jsonl"), "utf8");
+    const raw = await readFile(dataPath("training-metrics.jsonl"), "utf8");
     const lines = raw.trim().split("\n").filter(Boolean);
     lastTrainingTick = JSON.parse(lines[lines.length - 1] ?? "null");
   } catch { /* no metrics yet */ }

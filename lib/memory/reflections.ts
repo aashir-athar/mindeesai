@@ -12,9 +12,10 @@ import { appendFile, mkdir, readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import type { Reflection } from "@/lib/types";
 import { createLogger } from "@/lib/logger";
+import { dataPath } from "@/lib/paths";
 
 const log = createLogger("reflections");
-const DIR = path.join(process.cwd(), "data", "reflections");
+const DIR = dataPath("reflections");
 
 function dateFile() {
   const d = new Date().toISOString().slice(0, 10);

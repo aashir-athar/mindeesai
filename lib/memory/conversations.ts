@@ -14,9 +14,10 @@ import { appendFile, mkdir, readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import type { Message } from "@/lib/types";
 import { createLogger } from "@/lib/logger";
+import { dataPath } from "@/lib/paths";
 
 const log = createLogger("conversations");
-const DIR = path.join(process.cwd(), "data", "conversations");
+const DIR = dataPath("conversations");
 
 async function ensureDir() {
   await mkdir(DIR, { recursive: true });

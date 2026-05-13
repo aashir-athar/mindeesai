@@ -18,11 +18,12 @@ import { selfImproveTick } from "@/core/mindees-mind";
 import { isoNow, nid, safeJson } from "@/lib/utils";
 import type { Reflection } from "@/lib/types";
 import { createLogger } from "@/lib/logger";
+import { dataPath } from "@/lib/paths";
 
 const log = createLogger("optimizer");
 
-const WEIGHTS_FILE = path.join(process.cwd(), "data", "retrieval-weights.json");
-const LOG_FILE = path.join(process.cwd(), "data", "improvement-log.jsonl");
+const WEIGHTS_FILE = dataPath("retrieval-weights.json");
+const LOG_FILE = dataPath("improvement-log.jsonl");
 
 const CONFIDENCE_THRESHOLD = 0.7;
 

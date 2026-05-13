@@ -38,12 +38,13 @@ import { runEval, passesRegression, type EvalSnapshot } from "../eval/harness";
 import { curate } from "../data/pipeline";
 import type { BpeTokenizer } from "../tokenizer/bpe";
 import { createLogger } from "@/lib/logger";
+import { CHECKPOINTS_DIR, dataPath, checkpointPath } from "@/lib/paths";
 
 const log = createLogger("online-train");
-const CHECKPOINT_DIR = path.join(process.cwd(), "checkpoints");
-const LORA_FILE = path.join(CHECKPOINT_DIR, "lora-latest.bin");
-const LORA_PREV_FILE = path.join(CHECKPOINT_DIR, "lora-prev.bin");
-const METRICS_FILE = path.join(process.cwd(), "data", "training-metrics.jsonl");
+const CHECKPOINT_DIR = CHECKPOINTS_DIR;
+const LORA_FILE = checkpointPath("lora-latest.bin");
+const LORA_PREV_FILE = checkpointPath("lora-prev.bin");
+const METRICS_FILE = dataPath("training-metrics.jsonl");
 
 export interface TrainBatch {
   tokens: Int32Array;

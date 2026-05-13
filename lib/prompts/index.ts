@@ -7,14 +7,14 @@
  */
 
 import { readFile } from "node:fs/promises";
-import path from "node:path";
 import { SEED_SYSTEM_PROMPT } from "./base";
 import { createLogger } from "@/lib/logger";
+import { dataPath } from "@/lib/paths";
 
 const log = createLogger("prompts");
 
 let cache: { prompt: string; mtime: number } | null = null;
-const PROMPT_PATH = path.join(process.cwd(), "data", "system-prompt.json");
+const PROMPT_PATH = dataPath("system-prompt.json");
 
 /** Read the active prompt, with in-memory caching keyed by file mtime. */
 export async function getActiveSystemPrompt(): Promise<string> {

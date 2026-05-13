@@ -14,8 +14,9 @@ import type { ModelWeights } from "../../model/transformer";
 import type { BpeTokenizer } from "../../tokenizer/bpe";
 import { readFile, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { dataPath } from "@/lib/paths";
 
-const EVAL_CORPUS = path.join(process.cwd(), "data", "eval", "perplexity.txt");
+const EVAL_CORPUS = dataPath("eval", "perplexity.txt");
 
 export interface PerplexityResult {
   perplexity: number;

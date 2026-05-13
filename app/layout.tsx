@@ -49,7 +49,7 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     title: "MindeesAI",
     description: "A native, self-training open-source AI.",
-    creator: "@aashir_athar",
+    creator: "@aashirathar",
     images: ["/og/default.png"],
   },
   icons: {

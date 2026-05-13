@@ -18,7 +18,9 @@ export type ReplayEntry = {
   createdAt: string;
 };
 
-const FILE = path.join(process.cwd(), "data", "replay-buffer.json");
+import { dataPath } from "@/lib/paths";
+
+const FILE = dataPath("replay-buffer.json");
 
 export class ReplayBuffer {
   private items: ReplayEntry[] = [];

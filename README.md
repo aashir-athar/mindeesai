@@ -574,8 +574,8 @@ MindeesAI stands on the shoulders of several brilliant open-source projects:
 Built by [**Aashir Athar**](https://github.com/aashir-athar)
 
 <a href="https://github.com/aashir-athar"><img src="https://img.shields.io/badge/GitHub-aashir--athar-181717?style=flat-square&logo=github&labelColor=06060a" alt="GitHub" /></a>
-<a href="#"><img src="https://img.shields.io/badge/X-@aashir__athar-000000?style=flat-square&logo=x&labelColor=06060a" alt="X / Twitter" /></a>
-<a href="#"><img src="https://img.shields.io/badge/LinkedIn-Aashir%20Athar-0a66c2?style=flat-square&logo=linkedin&labelColor=06060a" alt="LinkedIn" /></a>
+<a href="https://x.com/aashirathar"><img src="https://img.shields.io/badge/X-@aashirathar-000000?style=flat-square&logo=x&labelColor=06060a" alt="X / Twitter" /></a>
+<a href="https://www.linkedin.com/in/aashirathar"><img src="https://img.shields.io/badge/LinkedIn-Aashir%20Athar-0a66c2?style=flat-square&logo=linkedin&labelColor=06060a" alt="LinkedIn" /></a>
 
 </div>
 

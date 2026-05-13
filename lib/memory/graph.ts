@@ -15,8 +15,9 @@
 
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
+import { dataPath } from "@/lib/paths";
 
-const FILE = path.join(process.cwd(), "data", "graph.json");
+const FILE = dataPath("graph.json");
 
 export type Triple = {
   subject: string;

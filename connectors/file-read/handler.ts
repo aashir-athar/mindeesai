@@ -6,6 +6,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { ConnectorHandler } from "@/lib/connectors/types";
+import { DATA_DIR } from "@/lib/paths";
 
 type Args = { path: string };
 const MAX_BYTES = 64 * 1024; // 64KB
@@ -14,7 +15,7 @@ const handler: ConnectorHandler<Args> = async (args, ctx) => {
   const { path: rel } = args ?? ({} as Args);
   if (!rel) return { ok: false, error: "path required" };
 
-  const dataDir = path.resolve(process.cwd(), "data");
+  const dataDir = path.resolve(DATA_DIR);
   const target = path.resolve(dataDir, rel);
   if (!target.startsWith(dataDir + path.sep) && target !== dataDir) {
     return { ok: false, error: "path escapes data directory" };
