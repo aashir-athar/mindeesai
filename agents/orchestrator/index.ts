@@ -13,9 +13,9 @@
 
 import { streamLLM } from "@/lib/llm/router";
 import { generateTextStream } from "@/core/mindees-mind";
-import { env } from "@/lib/env";
 import { existsSync } from "node:fs";
 import { checkpointPath } from "@/lib/paths";
+import { effectiveFlags } from "@/lib/runtime-flags";
 import type { LLMRequest, LLMStreamChunk } from "@/lib/types";
 import { getRegistry, runConnector, listTools } from "@/lib/connectors/loader";
 import { buildContext } from "@/lib/connectors/context";
@@ -248,9 +248,11 @@ export async function* orchestrate(opts: {
   const history: Message[] = [...thread, userTurn].slice(-13);
 
   // 7. Decide which brain serves this turn — native vs cloud bootstrap.
-  //    The native model needs BOTH the USE_NATIVE_MODEL flag AND a checkpoint
-  //    that has actually been loaded (otherwise we'd serve random-weight noise).
-  const useNative = env.USE_NATIVE_MODEL && existsSync(checkpointPath("base.bin"));
+  //    The native model needs BOTH the runtime flag AND a checkpoint that has
+  //    actually been loaded (otherwise we'd serve random-weight noise).
+  //    The runtime flag honors the /admin override file ahead of env vars.
+  const flags = await effectiveFlags();
+  const useNative = flags.useNativeModel && existsSync(checkpointPath("base.bin"));
   const inferenceFn: (req: LLMRequest) => AsyncIterable<LLMStreamChunk> = useNative
     ? makeNativeInferenceAdapter()
     : streamLLM;

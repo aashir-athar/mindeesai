@@ -11,10 +11,10 @@
  */
 
 import { NextResponse } from "next/server";
-import { env } from "@/lib/env";
 import { getMind } from "@/core/mindees-mind";
 import { existsSync } from "node:fs";
 import { checkpointPath } from "@/lib/paths";
+import { effectiveFlags } from "@/lib/runtime-flags";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -22,11 +22,12 @@ export const dynamic = "force-dynamic";
 export async function GET() {
   const checkpointExists = existsSync(checkpointPath("base.bin"));
   const { cfg } = await getMind();
+  const flags = await effectiveFlags();
 
   let mode: "native" | "cloud-bootstrap" | "cloud-no-checkpoint";
   let label: string;
 
-  if (env.USE_NATIVE_MODEL && checkpointExists) {
+  if (flags.useNativeModel && checkpointExists) {
     mode = "native";
     label = `Mindees Native (${cfg.variant})`;
   } else if (checkpointExists) {
@@ -42,7 +43,8 @@ export async function GET() {
     mode,
     label,
     flags: {
-      USE_NATIVE_MODEL: env.USE_NATIVE_MODEL,
+      USE_NATIVE_MODEL: flags.useNativeModel,
+      USE_NATIVE_MODEL_source: flags.source.useNativeModel,
       checkpoint_present: checkpointExists,
     },
     variant: cfg.variant,
