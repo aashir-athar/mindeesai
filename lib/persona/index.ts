@@ -103,3 +103,12 @@ export {
   innerVoiceNarrative,
   type InnerThought,
 } from "./inner-voice";
+
+// v0.2.8 — topic-affinity (which topics light THIS user up)
+export {
+  bumpAffinity,
+  engagementFromTurn,
+  readAffinities,
+  affinityNarrative,
+  type TopicAffinity,
+} from "./topic-affinity";

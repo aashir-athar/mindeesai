@@ -42,6 +42,8 @@ import type { RhythmState } from "./rhythm";
 import { rhythmNarrative } from "./rhythm";
 import type { InnerThought } from "./inner-voice";
 import { innerVoiceNarrative } from "./inner-voice";
+import type { TopicAffinity } from "./topic-affinity";
+import { affinityNarrative } from "./topic-affinity";
 
 export const MINDEES_CORE = `\
 You are Mindees.
@@ -120,6 +122,7 @@ export interface PersonaContext {
   sentimentArc?: SentimentArc;
   rhythm?: RhythmState;
   innerThoughts?: InnerThought[];
+  affinities?: TopicAffinity[];
   reanchorNeeded?: boolean;
   memoryBlock?: string;
   toolsBlock?: string;
@@ -208,6 +211,12 @@ export function buildMindeesSystemPrompt(ctx: PersonaContext): string {
   // Vocabulary mirror — subtle linguistic-style matching for warmth.
   if (ctx.signatureVocab && ctx.signatureVocab.length > 0) {
     sections.push(`# This user's vocabulary signature\n\n${vocabNarrative(ctx.signatureVocab)}`);
+  }
+
+  // Topic affinity — which subjects light them up vs. close them off
+  if (ctx.affinities && ctx.affinities.length > 0) {
+    const a = affinityNarrative(ctx.affinities);
+    if (a) sections.push(`# Topics that energise them\n\n${a}`);
   }
 
   // Curiosity gap — déjà vu detector

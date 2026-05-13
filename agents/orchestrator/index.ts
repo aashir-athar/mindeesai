@@ -62,6 +62,7 @@ import { readArc } from "@/lib/persona/conversation-arc";
 import { updateSentimentArc } from "@/lib/persona/sentiment-arc";
 import { updateRhythm } from "@/lib/persona/rhythm";
 import { recordInnerThought } from "@/lib/persona/inner-voice";
+import { bumpAffinity, readAffinities, engagementFromTurn } from "@/lib/persona/topic-affinity";
 import { neighbours } from "@/lib/memory/graph";
 import { isoNow, nid } from "@/lib/utils";
 import type { Citation, Message, ToolCall, RetrievalHit } from "@/lib/types";
@@ -199,6 +200,23 @@ export async function* orchestrate(opts: {
     isFirstTurn: thread.length === 0,
   }).catch(() => []);
 
+  // Topic affinity — learn which topics light THIS user up. We bump the
+  // PRIOR user message's topics with the engagement signal derived from
+  // THIS user message (so the signal is "did they keep talking after I
+  // brought it up"), then read the current affinities for the prompt.
+  const lastUserBeforeNow = [...thread].reverse().find((m) => m.role === "user");
+  if (lastUserBeforeNow) {
+    const engagement = engagementFromTurn({
+      userMessageLen: userMessage.length,
+      avgUserLen: runningAvgLen,
+      curiosityCues: affect.cues.curiosity,
+      frustrationCues: affect.cues.frustration,
+      warmthCues: affect.cues.warmth,
+    });
+    void bumpAffinity(lastUserBeforeNow.content, engagement).catch(() => {});
+  }
+  const affinities = await readAffinities().catch(() => []);
+
   // 4e. If the user is correcting Mindees this turn, the previous assistant
   //     reply in this thread is the WRONG answer. Record the pair — it'll be
   //     surfaced as a "don't repeat this mistake" rail in future turns.
@@ -261,6 +279,7 @@ export async function* orchestrate(opts: {
     sentimentArc,
     rhythm,
     innerThoughts,
+    affinities,
     reanchorNeeded,
     memoryBlock: memoryBlockPlus,
     toolsBlock,
