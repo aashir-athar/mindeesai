@@ -1,30 +1,25 @@
 /**
- * The Orchestrator — MindeesAI's "main loop".
+ * The Orchestrator — Mindees' main response loop.
  *
- * Inference path (v0.2.1):
- *   - **Today:** delegates to `lib/llm/router.streamLLM`, which routes to the
- *     first configured cloud provider (Anthropic → xAI → OpenAI → Groq →
- *     Google) or falls back to a reachable Ollama instance.
- *   - **Future:** when `checkpoints/base.bin` exists (pretrained native model),
- *     a flag will flip the orchestrator to use `mindees.generateTextStream`.
- *     The native model's *training* pipeline is already running every 5 minutes
- *     and ingesting these conversations — see [[self-improvement-loop]].
+ * Inference path:
+ *   - All generation goes through `lib/llm/router.streamLLM` (Groq today,
+ *     swappable to the native model once a checkpoint exists).
+ *   - NO reasoning-mode branch — that path used the random-weight native
+ *     model and stalled requests until timeout. It's commented out below
+ *     and will be re-enabled the day the native checkpoint lands.
  *
- * Why the LLM router today?
- *   The native model's weights are randomly initialised. Without pretraining
- *   it can't produce coherent text. Until a checkpoint is minted, the LLM
- *   router IS the working inference engine. This is the standard bootstrap
- *   pattern for self-training systems.
+ * Persona:
+ *   Every request reads + updates the Mindees mood tensor (8-dim, persistent)
+ *   and injects the persona system prompt with current emotional state.
+ *   This is what turns the LLM's default register into something that sounds
+ *   like an actual continuous entity instead of a fresh model on every turn.
  *
  * Tool-calling:
- *   We use the providers' native function-calling protocol (OpenAI-compatible
- *   `tool_calls`), surfaced by the router as `{ type: "tool-call", toolCall }`
- *   chunks. The orchestrator runs the connector, appends a tool-result
- *   message to the history, and loops the LLM with the updated history.
+ *   Providers' native function-calling protocol; surfaced as `tool-call`
+ *   chunks the orchestrator runs and feeds back as `tool` messages.
  */
 
 import { streamLLM } from "@/lib/llm/router";
-import { getActiveSystemPrompt } from "@/lib/prompts";
 import { getRegistry, runConnector, listTools } from "@/lib/connectors/loader";
 import { buildContext } from "@/lib/connectors/context";
 import {
@@ -34,8 +29,9 @@ import {
   recallInsights,
   readThread,
 } from "@/lib/memory";
+import { readAffect, updateMood, buildMindeesSystemPrompt } from "@/lib/persona";
 import { isoNow, nid } from "@/lib/utils";
-import type { Citation, Message, ToolCall } from "@/lib/types";
+import type { Citation, Message, ToolCall, RetrievalHit } from "@/lib/types";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("orchestrator");
@@ -48,6 +44,7 @@ export type OrchestratorEvent =
   | { type: "tool-start"; name: string; args: unknown; callId: string }
   | { type: "tool-end"; name: string; callId: string; ok: boolean; ms: number }
   | { type: "citation"; citation: Citation }
+  | { type: "mood"; mood: { values: Record<string, number>; steps: number; lastRegister?: string } }
   | { type: "finish"; message: Message };
 
 export async function* orchestrate(opts: {
@@ -55,12 +52,11 @@ export async function* orchestrate(opts: {
   userMessage: string;
   signal: AbortSignal;
   user?: { id: string };
-  /** Override the LLM model (e.g., "anthropic:claude-opus-4-7", "groq:llama-3.3-70b-versatile"). */
   modelId?: string;
 }): AsyncIterable<OrchestratorEvent> {
   const { threadId, userMessage, signal, user, modelId } = opts;
 
-  // 1. Append user turn to thread + memory
+  // 1. Append user turn (sync — needed before recall so the new message is in history)
   const userTurn: Message = {
     id: nid(),
     role: "user",
@@ -69,34 +65,45 @@ export async function* orchestrate(opts: {
   };
   await appendMessage(threadId, userTurn);
 
+  // 2. Update Mindees' mood tensor with this turn's affect — BEFORE generating
+  //    so the system prompt reflects the current emotional state.
+  const affect = readAffect(userMessage);
+  const mood = await updateMood(affect);
+  yield { type: "mood", mood: { values: mood.values, steps: mood.steps, lastRegister: mood.lastRegister } };
+
   yield { type: "stage", stage: "context" };
 
-  // 2. Assemble context in parallel
+  // 3. Assemble context in parallel
   const thread = await readThread(threadId);
   const [memoryHits, insightHits] = await Promise.all([
-    recall(userMessage, 6, threadId).catch(() => []),
-    recallInsights(userMessage, 4).catch(() => []),
+    recall(userMessage, 6, threadId).catch(() => [] as RetrievalHit[]),
+    recallInsights(userMessage, 4).catch(() => [] as RetrievalHit[]),
   ]);
   const memoryBlock = formatMemoryBlock(memoryHits, insightHits);
 
-  // 3. System prompt + tool descriptors
-  const basePrompt = await getActiveSystemPrompt();
+  // 4. Build the Mindees system prompt — persona + current mood + memory + tools
   const registry = await getRegistry();
   const toolGuidance = [...registry.values()]
     .filter((c) => c.prompt)
     .map((c) => `### ${c.manifest.name}\n${c.prompt}`)
     .join("\n\n");
-  const systemPrompt = [basePrompt, memoryBlock, toolGuidance ? `\n## Tool-specific guidance\n${toolGuidance}` : ""]
-    .filter(Boolean)
-    .join("\n");
+  const toolsBlock = toolGuidance
+    ? `# Tool-specific guidance\n${toolGuidance}`
+    : undefined;
+
+  const systemPrompt = buildMindeesSystemPrompt({
+    mood,
+    memoryBlock,
+    toolsBlock,
+  });
 
   const tools = await listTools();
 
-  // 4. Conversation history — last 12 turns, excluding the current user turn
-  //    (it's appended last so the model knows what to answer)
+  // 5. Conversation history — last 12 turns
   const history: Message[] = [...thread, userTurn].slice(-13);
 
-  // 5. Tool-call loop
+  // 6. Tool-call loop — streams text directly to the UI, runs connectors when
+  //    the model emits structured tool_calls.
   let aggregatedText = "";
   const citations: Citation[] = [];
   let conversation: Message[] = history;
@@ -114,7 +121,7 @@ export async function* orchestrate(opts: {
       system: systemPrompt,
       tools,
       signal,
-      thinking: true,
+      thinking: false, // never trigger native-model reasoning path
     })) {
       if (signal.aborted) break;
       if (chunk.type === "text" && chunk.text) {
@@ -130,13 +137,9 @@ export async function* orchestrate(opts: {
       }
     }
 
-    if (hopReasoning) {
-      yield { type: "reasoning", text: hopReasoning };
-    }
-
+    if (hopReasoning) yield { type: "reasoning", text: hopReasoning };
     if (pendingTools.length === 0) break;
 
-    // Record the assistant turn that issued the tool calls
     const assistantToolTurn: Message = {
       id: nid(),
       role: "assistant",
@@ -146,11 +149,9 @@ export async function* orchestrate(opts: {
     };
     conversation = [...conversation, assistantToolTurn];
 
-    // Run each tool sequentially (parallel is possible but tool ordering matters for citations)
     for (const tc of pendingTools) {
       const start = performance.now();
       yield { type: "tool-start", name: tc.name, args: tc.args, callId: tc.id };
-
       const entry = registry.get(tc.name);
       let result: Awaited<ReturnType<typeof runConnector>>;
       if (!entry) {
@@ -186,7 +187,7 @@ export async function* orchestrate(opts: {
     }
   }
 
-  // 6. Final assistant turn
+  // 7. Persist final turn + memory
   const finalAssistant: Message = {
     id: nid(),
     role: "assistant",
