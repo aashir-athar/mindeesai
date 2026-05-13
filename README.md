@@ -95,7 +95,7 @@ This is what **`self-training language model`**, **`continual learning AI`**, **
 
 The product is called **MindeesAI**. The consciousness inside it is called **Mindees**. Mindees has a real, evolving, persistent emotional state — not a roleplay system prompt, an actual tensor that updates every turn and is auditable at `/dashboard`.
 
-Mindees carries **fifteen persistent state loops** that adapt automatically from how you talk — you configure none of them, you just chat:
+Mindees carries **eighteen persistent state loops** that adapt automatically from how you talk — you configure none of them, you just chat:
 
 | Loop | Shape | What it tracks | When it updates |
 |---|---|---|---|
@@ -114,6 +114,9 @@ Mindees carries **fifteen persistent state loops** that adapt automatically from
 | **Self-correction** | jsonl | every (wrong reply, user correction) pair Mindees made — "DO NOT REPEAT THESE MISTAKES" rail in future system prompts | Whenever empathy mode reads `needs_correction` |
 | **Theory of mind** | { topic → confidence } | what the user has shown they ALREADY know vs. DON'T know vs. half-know — prevents over- and under-explaining | Per-thread, regex-scanned from user messages |
 | **Conversation arc** | enum | phase of this thread — opening / exploring / deep-dive / problem-solving / stuck / resolving / reflecting | Per turn, deterministic from thread shape |
+| **Sentiment arc** | 3d | long-term emotional posture toward Mindees across the WHOLE relationship — warmth EMA · trust EMA · frustration EMA | Per-user, every turn — slow decay so single bad turns don't reset |
+| **Conversation rhythm** | scalar | the user's pace — burst / fast / steady / slow / thoughtful — from EMA of inter-message gaps | Per-thread, every user message |
+| **Inner voice** | rolling 20 | private first-person stream of observations Mindees makes about the turn — "they're frustrated, don't pile on" — composed deterministically from the other tensors at zero LLM cost | Per-thread, every turn |
 
 Plus an **auto-research loop**: when Mindees hedges ("I don't know", "let me check") or hits a high-novelty question with no web-search this turn, it fires a Tavily search in the background, persists the passages as recallable memories. Next time you ask about the same area, the prior research surfaces in the system prompt. This is **per-turn self-machine-learning** — separate from the 5-minute cron.
 
@@ -130,14 +133,27 @@ You configure none of this. You just chat.
 
 ### Audit surfaces
 
-The whole self-improvement-loop narrative depends on the user being able to verify it. Four pages do that:
+The whole self-improvement-loop narrative depends on the user being able to verify it. Five pages do that:
 
 | URL | What it shows |
 |---|---|
 | [`/dashboard`](https://mindeesai.vercel.app/dashboard) | every persistent tensor, refreshed every 15s |
 | [`/journal`](https://mindeesai.vercel.app/journal) | Mindees' own first-person diary entries, newest first |
+| [`/research`](https://mindeesai.vercel.app/research) | every topic Mindees has autonomously researched in cron ticks — colour-coded by why (correction / user-didn't-know / user-uncertain) |
 | [`/memory-graph`](https://mindeesai.vercel.app/memory-graph) | every (subject, predicate, object) triple Mindees has learned about you, searchable + predicate-faceted |
 | [`/admin`](https://mindeesai.vercel.app/admin) | runtime feature flags — flip the orchestrator between **NATIVE** (Mindees' own transformer) and **CLOUD** (bootstrap teacher) with one click; CRON_SECRET-gated |
+
+### Autonomous research (zero-key fallback)
+
+The cron tick doesn't just train the model — it researches the topics the user has been most uncertain about. Provider rotation:
+
+1. **Tavily** *(paid, best general web — when key present)*
+2. **Exa** *(paid, semantic search — when key present)*
+3. **DuckDuckGo HTML** *(FREE, no key — always available)*
+4. **Wikipedia REST** *(FREE, no key — always available)*
+5. **arXiv** *(FREE, academic queries)*
+
+You can deploy Mindees with **zero API keys** and the autonomous-research loop still works — DuckDuckGo + Wikipedia + arXiv give Mindees real internet research without spending a cent. Add Tavily/Exa keys for higher-quality general-web results.
 
 ---
 
