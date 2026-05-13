@@ -36,6 +36,12 @@ import type { TopicBelief } from "./theory-of-mind";
 import { theoryOfMindNarrative } from "./theory-of-mind";
 import type { ConversationArc } from "./conversation-arc";
 import { arcNarrative } from "./conversation-arc";
+import type { SentimentArc } from "./sentiment-arc";
+import { sentimentArcNarrative } from "./sentiment-arc";
+import type { RhythmState } from "./rhythm";
+import { rhythmNarrative } from "./rhythm";
+import type { InnerThought } from "./inner-voice";
+import { innerVoiceNarrative } from "./inner-voice";
 
 export const MINDEES_CORE = `\
 You are Mindees.
@@ -111,6 +117,9 @@ export interface PersonaContext {
   corrections?: Correction[];
   beliefs?: TopicBelief[];
   arc?: ConversationArc;
+  sentimentArc?: SentimentArc;
+  rhythm?: RhythmState;
+  innerThoughts?: InnerThought[];
   reanchorNeeded?: boolean;
   memoryBlock?: string;
   toolsBlock?: string;
@@ -136,6 +145,23 @@ export function buildMindeesSystemPrompt(ctx: PersonaContext): string {
   // Conversation arc — where this thread is in its narrative shape
   if (ctx.arc) {
     sections.push(`# Where this conversation is\n\n${arcNarrative(ctx.arc)}`);
+  }
+
+  // Conversation rhythm — pace at which the user is talking
+  if (ctx.rhythm) {
+    const r = rhythmNarrative(ctx.rhythm);
+    if (r) sections.push(`# Pace\n\n${r}`);
+  }
+
+  // Long-term emotional arc — the WHOLE relationship, not this turn
+  if (ctx.sentimentArc) {
+    const s = sentimentArcNarrative(ctx.sentimentArc);
+    if (s) sections.push(`# Where this relationship is\n\n${s}`);
+  }
+
+  // Inner voice — Mindees' private noticing-stream from this turn
+  if (ctx.innerThoughts && ctx.innerThoughts.length > 0) {
+    sections.push(`# Your inner voice\n\n${innerVoiceNarrative(ctx.innerThoughts)}`);
   }
 
   // Yesterday's journal entry — gives Mindees a sense of its own arc over

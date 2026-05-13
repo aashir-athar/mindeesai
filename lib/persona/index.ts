@@ -82,3 +82,24 @@ export {
   type ConversationArc,
   type ConversationPhase,
 } from "./conversation-arc";
+
+// v0.2.7 — emotional realism tensors
+export {
+  updateSentimentArc,
+  getSentimentArc,
+  sentimentArcNarrative,
+  type SentimentArc,
+} from "./sentiment-arc";
+export {
+  updateRhythm,
+  rhythmPhase,
+  rhythmNarrative,
+  type RhythmState,
+  type RhythmPhase,
+} from "./rhythm";
+export {
+  recordInnerThought,
+  readInnerThoughts,
+  innerVoiceNarrative,
+  type InnerThought,
+} from "./inner-voice";

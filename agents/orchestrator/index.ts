@@ -59,6 +59,9 @@ import { recordUserText, signatureVocab } from "@/lib/persona/vocab-mirror";
 import { recordCorrection, recentCorrections } from "@/lib/persona/self-correction";
 import { updateFromUserMessage as updateTheoryOfMind, readBeliefs } from "@/lib/persona/theory-of-mind";
 import { readArc } from "@/lib/persona/conversation-arc";
+import { updateSentimentArc } from "@/lib/persona/sentiment-arc";
+import { updateRhythm } from "@/lib/persona/rhythm";
+import { recordInnerThought } from "@/lib/persona/inner-voice";
 import { neighbours } from "@/lib/memory/graph";
 import { isoNow, nid } from "@/lib/utils";
 import type { Citation, Message, ToolCall, RetrievalHit } from "@/lib/types";
@@ -180,6 +183,22 @@ export async function* orchestrate(opts: {
   // Conversation arc — deterministic from thread shape (no I/O needed)
   const arc = readArc([...thread, userTurn]);
 
+  // Emotional-realism tensors — long-term sentiment arc + pace + inner voice
+  const [sentimentArc, rhythm] = await Promise.all([
+    updateSentimentArc(affect).catch(() => undefined),
+    updateRhythm(threadId).catch(() => undefined),
+  ]);
+  const innerThoughts = await recordInnerThought({
+    threadId,
+    mood,
+    affect,
+    empathy,
+    relationship: relationshipNext,
+    rhythm,
+    arc,
+    isFirstTurn: thread.length === 0,
+  }).catch(() => []);
+
   // 4e. If the user is correcting Mindees this turn, the previous assistant
   //     reply in this thread is the WRONG answer. Record the pair — it'll be
   //     surfaced as a "don't repeat this mistake" rail in future turns.
@@ -239,6 +258,9 @@ export async function* orchestrate(opts: {
     corrections: pastCorrections,
     beliefs,
     arc,
+    sentimentArc,
+    rhythm,
+    innerThoughts,
     reanchorNeeded,
     memoryBlock: memoryBlockPlus,
     toolsBlock,
