@@ -104,6 +104,10 @@ export async function performAutoResearch(opts: {
   signal?: AbortSignal;
 }): Promise<{ topic: string; passages: number; durationMs: number } | null> {
   const start = performance.now();
+  // Lazy-import to avoid pulling fs into edge bundles that just import the
+  // decide function.
+  const { setResearching, clearResearching } = await import("@/lib/research/status");
+  await setResearching(opts.topic, "per-turn-hedge");
   try {
     const result = await research(opts.topic, opts.signal);
     const durationMs = performance.now() - start;
@@ -112,5 +116,7 @@ export async function performAutoResearch(opts: {
   } catch (e) {
     log.warn("auto-research failed", e);
     return null;
+  } finally {
+    await clearResearching();
   }
 }

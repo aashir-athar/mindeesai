@@ -26,6 +26,7 @@ import { createLogger } from "@/lib/logger";
 import { isoNow } from "@/lib/utils";
 import { pickCuriosityTopics, logAutoResearch } from "@/lib/research/auto-curiosity";
 import { research } from "@/lib/research";
+import { setResearching, clearResearching } from "@/lib/research/status";
 import { maybeWriteJournalEntry } from "@/lib/persona/journal";
 
 export const runtime = "nodejs";
@@ -90,6 +91,7 @@ export async function POST(req: NextRequest) {
       try {
         for (const t of topics) {
           if (abortCtrl.signal.aborted) break;
+          await setResearching(t.topic, `cron-${t.reason}`);
           try {
             const r = await research(t.topic, abortCtrl.signal);
             const entry = { topic: t.topic, hits: r.hits.length, passages: r.passages.length, ok: true };
@@ -117,6 +119,7 @@ export async function POST(req: NextRequest) {
         }
       } finally {
         clearTimeout(researchBudget);
+        await clearResearching();
       }
     } catch (e) {
       log.warn("auto-research stage failed", e);

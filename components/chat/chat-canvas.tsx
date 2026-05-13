@@ -23,6 +23,7 @@ import { CitationPill } from "./citation-pill";
 import { MessageMarkdown } from "./message-markdown";
 import { ThreadSwitcher } from "./thread-switcher";
 import { ModePill } from "./mode-pill";
+import { ResearchStatus } from "./research-status";
 
 type RecalledMemory = { text: string; score: number; source?: string };
 
@@ -208,6 +209,7 @@ export function ChatCanvas({ threadId }: { threadId: string }) {
           <ThreadSwitcher currentThreadId={threadId} />
         </div>
         <div className="flex items-center gap-5">
+          <ResearchStatus />
           {goal && <GoalRibbon goal={goal} />}
           {mood && <MoodPill mood={mood} />}
           <ModePill />
