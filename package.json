@@ -41,7 +41,6 @@
   ],
   "author": "Aashir Athar <iamaashirathar@gmail.com> (https://github.com/aashir-athar)",
   "license": "MIT",
-  "type": "module",
   "bugs": {
     "url": "https://github.com/aashir-athar/mindeesai/issues"
   },
