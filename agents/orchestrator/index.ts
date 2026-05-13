@@ -167,6 +167,14 @@ export async function* orchestrate(opts: {
     .join("\n\n");
   const toolsBlock = toolGuidance ? `# Tool-specific guidance\n${toolGuidance}` : undefined;
 
+  // Rolling thread summary — for long threads, this collapses everything
+  // older than the verbatim recent-turns slice into a few editorial
+  // sentences. Effective infinite memory of THIS thread at constant cost.
+  const summary = await getSummary(threadId).catch(() => null);
+  const memoryBlockPlus = summary
+    ? `${memoryBlock}\n\n## Where this conversation has been so far\n${summary.summary}`
+    : memoryBlock;
+
   const systemPrompt = buildMindeesSystemPrompt({
     mood,
     user: userModelNext,
@@ -177,7 +185,7 @@ export async function* orchestrate(opts: {
     graphFacts,
     empathy,
     reanchorNeeded,
-    memoryBlock,
+    memoryBlock: memoryBlockPlus,
     toolsBlock,
   });
 
@@ -352,12 +360,17 @@ export async function* orchestrate(opts: {
   // Thread metadata: titled on first turn, lastActivity bumped every turn
   const priorMeta = await getMeta(threadId);
   const isFirstTurn = !priorMeta || priorMeta.turns === 0;
+  const newTurnCount = (priorMeta?.turns ?? 0) + 1;
   await touchMeta(threadId, {
-    turns: (priorMeta?.turns ?? 0) + 1,
+    turns: newTurnCount,
     preview: priorMeta?.preview || userMessage.slice(0, 120),
     lastUserMsg: userMessage.slice(0, 120),
     lastAssistantMsg: finalAssistant.content.slice(0, 120),
   });
+
+  // Rolling thread summary refresh — only fires every N turns
+  void maybeUpdateSummary({ threadId, currentTurnCount: newTurnCount })
+    .catch((e) => log.warn("thread summary failed", e));
   if (isFirstTurn && finalAssistant.content) {
     // Fire-and-forget title generation
     void (async () => {
