@@ -47,6 +47,7 @@ import {
   decideAutoResearch,
   performAutoResearch,
 } from "@/lib/persona";
+import { detectDisclaimerLeak, buildReanchorForLeak } from "@/lib/persona/leak-guard";
 import { neighbours } from "@/lib/memory/graph";
 import { isoNow, nid } from "@/lib/utils";
 import type { Citation, Message, ToolCall, RetrievalHit } from "@/lib/types";
@@ -63,6 +64,8 @@ export type OrchestratorEvent =
   | { type: "tool-end"; name: string; callId: string; ok: boolean; ms: number }
   | { type: "citation"; citation: Citation }
   | { type: "mood"; mood: { values: Record<string, number>; steps: number; lastRegister?: string } }
+  | { type: "memories"; recalled: Array<{ text: string; score: number; source?: string }> }
+  | { type: "replace-answer"; text: string; reason: string }
   | { type: "finish"; message: Message };
 
 export async function* orchestrate(opts: {
@@ -285,6 +288,38 @@ export async function* orchestrate(opts: {
         ...conversation,
         { id: nid(), role: "tool", content, toolCallId: tc.id, createdAt: isoNow() },
       ];
+    }
+  }
+
+  // 7b. DISCLAIMER-LEAK GUARD — post-stream check. If Llama-3's RLHF training
+  //     leaked the "as an AI, I don't have feelings" register past the persona
+  //     prompt, regenerate with an explicit re-anchor and replace the answer
+  //     in the UI. Yes the user briefly sees the bad text; the alternative is
+  //     leaving it there.
+  const leak = detectDisclaimerLeak(aggregatedText);
+  if (leak.leaked && leak.matched_text) {
+    log.warn(`disclaimer leak detected: "${leak.matched_text}" — regenerating`);
+    const reanchor = buildReanchorForLeak(leak.matched_text, userMessage);
+    let rewritten = "";
+    try {
+      for await (const c of streamLLM({
+        modelId,
+        messages: conversation,
+        system: systemPrompt + "\n\n" + reanchor,
+        tools: [], // no tools on rewrite path
+        signal,
+        thinking: false,
+      })) {
+        if (c.type === "text" && c.text) rewritten += c.text;
+        if (c.type === "finish") break;
+      }
+    } catch (e) {
+      log.warn("rewrite call failed", e);
+    }
+    rewritten = rewritten.trim();
+    if (rewritten && !detectDisclaimerLeak(rewritten).leaked) {
+      aggregatedText = rewritten;
+      yield { type: "replace-answer", text: rewritten, reason: leak.matched_text };
     }
   }
 

@@ -160,6 +160,10 @@ export function ChatCanvas({ threadId }: { threadId: string }) {
             return x;
           case "memories":
             return { ...x, recalled: (data as unknown as { recalled: RecalledMemory[] }).recalled };
+          case "replace-answer":
+            // Disclaimer-leak guard fired server-side. Clear the streamed
+            // (leaked) text and replace with the clean rewrite.
+            return { ...x, answer: (data as unknown as { text: string }).text ?? "" };
           case "reasoning":
             return { ...x, reasoning: (x.reasoning ?? "") + (data.text ?? "") };
           case "text":
