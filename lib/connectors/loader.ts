@@ -1,20 +1,21 @@
 /**
- * Connector discovery + registry.
+ * Connector registry — consumes the static registry in `connectors/registry.ts`.
  *
- * On boot (and on every cold start of a serverless function), we walk
- * `/connectors/*`, validate manifests, and dynamically import handlers.
- * The result is a `Registry` keyed by connector name.
+ * Why static instead of folder-scan?
+ *   Turbopack (and webpack, and esbuild) cannot trace `import(variable)` and
+ *   refuses to compile such expressions. The static-import file solves this
+ *   while keeping the developer experience of "drop a folder, edit one line".
  *
- * Production note: in a long-lived process, this registry is cached forever.
- * On Vercel each function instance loads it once and reuses it.
+ * The loader still scans the filesystem for the optional `prompt.md` file
+ * because that's a runtime read, not a module import — safe under any bundler.
  */
 
-import { readdir, readFile, stat } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { ConnectorManifestSchema } from "@/lib/types";
 import type { ConnectorHandler, ConnectorManifest, ToolDescriptor } from "@/lib/types";
 import { createLogger } from "@/lib/logger";
+import { BUILT_IN_CONNECTORS } from "@/connectors/registry";
 
 const log = createLogger("connectors");
 
@@ -31,52 +32,38 @@ const CONNECTORS_DIR = path.join(process.cwd(), "connectors");
 
 async function buildRegistry(): Promise<Map<string, RegisteredConnector>> {
   const map = new Map<string, RegisteredConnector>();
-  try {
-    const entries = await readdir(CONNECTORS_DIR);
-    for (const name of entries) {
-      const dir = path.join(CONNECTORS_DIR, name);
-      try {
-        const st = await stat(dir);
-        if (!st.isDirectory()) continue;
 
-        const manifestRaw = await readFile(path.join(dir, "manifest.json"), "utf8");
-        const parsed = ConnectorManifestSchema.parse(JSON.parse(manifestRaw));
+  for (const entry of BUILT_IN_CONNECTORS) {
+    try {
+      // Validate the manifest at boot — surfaces drift between manifest.json and the schema.
+      const parsed = ConnectorManifestSchema.parse(entry.manifest);
 
-        const handlerPath = pathToFileURL(path.join(dir, "handler.ts")).href;
-        // Fallback to .js (compiled) when running in production
-        const importPath = await fileExists(handlerPath.replace("file://", "")) ? handlerPath : pathToFileURL(path.join(dir, "handler.js")).href;
-        const mod = (await import(importPath)) as { default: ConnectorHandler };
-        if (typeof mod.default !== "function") {
-          log.warn(`connector ${name}: handler.ts missing default export`);
-          continue;
-        }
-
-        let prompt: string | undefined;
-        try {
-          prompt = await readFile(path.join(dir, "prompt.md"), "utf8");
-        } catch {
-          // optional
-        }
-
-        map.set(parsed.name, { manifest: parsed, handler: mod.default, prompt, dir });
-        log.info(`registered connector ${parsed.name}@${parsed.version}`);
-      } catch (e) {
-        log.warn(`skipping ${name}`, e);
+      if (typeof entry.handler !== "function") {
+        log.warn(`connector ${entry.dir}: handler is not a function`);
+        continue;
       }
-    }
-  } catch (e) {
-    log.warn("connectors directory missing", e);
-  }
-  return map;
-}
 
-async function fileExists(p: string): Promise<boolean> {
-  try {
-    await stat(p);
-    return true;
-  } catch {
-    return false;
+      // Optional runtime read of prompt.md — keeps prompt authoring in markdown.
+      let prompt: string | undefined;
+      try {
+        prompt = await readFile(path.join(CONNECTORS_DIR, entry.dir, "prompt.md"), "utf8");
+      } catch {
+        // optional — no prompt is fine
+      }
+
+      map.set(parsed.name, {
+        manifest: parsed,
+        handler: entry.handler,
+        prompt,
+        dir: entry.dir,
+      });
+      log.info(`registered connector ${parsed.name}@${parsed.version}`);
+    } catch (e) {
+      log.warn(`skipping ${entry.dir}`, e);
+    }
   }
+
+  return map;
 }
 
 export async function getRegistry(): Promise<Map<string, RegisteredConnector>> {

@@ -110,11 +110,11 @@ export const ConnectorManifestSchema = z.object({
     .passthrough(),
   permissions: z
     .array(
-      z.enum([
-        "network",
-        "filesystem-read",
-        "filesystem-write",
-        "child-process",
+      z.union([
+        z.enum(["network", "filesystem-read", "filesystem-write", "child-process"]),
+        // `secrets:VAR_NAME` exposes the named env var to the connector at runtime.
+        // VAR_NAME must match the SCREAMING_SNAKE convention used by env vars.
+        z.string().regex(/^secrets:[A-Z][A-Z0-9_]*$/),
       ]),
     )
     .default([]),
