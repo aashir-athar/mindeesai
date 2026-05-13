@@ -136,15 +136,26 @@ You configure none of this. You just chat.
 
 ### Audit surfaces
 
-The whole self-improvement-loop narrative depends on the user being able to verify it. Five pages do that:
+The whole self-improvement-loop narrative depends on the user being able to verify it. Six pages do that:
 
 | URL | What it shows |
 |---|---|
-| [`/dashboard`](https://mindeesai.vercel.app/dashboard) | every persistent tensor, refreshed every 15s |
+| [`/setup`](https://mindeesai.vercel.app/setup) | **start here after deploy** — one-screen health board, colour-coded, with the exact remediation step on every red row |
+| [`/dashboard`](https://mindeesai.vercel.app/dashboard) | every persistent tensor (21+), refreshed every 15s |
 | [`/journal`](https://mindeesai.vercel.app/journal) | Mindees' own first-person diary entries, newest first |
-| [`/research`](https://mindeesai.vercel.app/research) | every topic Mindees has autonomously researched in cron ticks — colour-coded by why (correction / user-didn't-know / user-uncertain) |
-| [`/memory-graph`](https://mindeesai.vercel.app/memory-graph) | every (subject, predicate, object) triple Mindees has learned about you, searchable + predicate-faceted |
-| [`/admin`](https://mindeesai.vercel.app/admin) | runtime feature flags — flip the orchestrator between **NATIVE** (Mindees' own transformer) and **CLOUD** (bootstrap teacher) with one click; CRON_SECRET-gated |
+| [`/research`](https://mindeesai.vercel.app/research) | every topic Mindees has autonomously researched in cron ticks |
+| [`/memory-graph`](https://mindeesai.vercel.app/memory-graph) | every (subject, predicate, object) triple — facts Mindees has learned about you AND about itself |
+| [`/admin`](https://mindeesai.vercel.app/admin) | runtime feature flags · **Run cron now** · **Run pretrain now** (one-click GitHub Actions dispatch) · CRON_SECRET-gated |
+
+### Zero-config self-learning loop
+
+When deployed to Vercel with a Blob store attached, **no other configuration is required**. `MEMORY_PERSISTENCE` auto-detects to `vercel-blob` when `BLOB_READ_WRITE_TOKEN` is present. Every chat turn auto-persists to Blob. Audit pages hydrate from Blob on cold start. The cron tick is budget-aware (45s internal cap; safe under Hobby's 60s function ceiling).
+
+Triggers:
+- **chat path** — every user message gets 35+ regex-extracted self-disclosure triples added to the graph synchronously, plus an LLM-extracted supplement post-reply.
+- **5-minute external cron** (cron-job.org) — reflect → optimize → autonomous research → journal → reach-out → persist.
+- **Daily Vercel Cron** — redundant fallback declared in `vercel.json` (`0 4 * * *`).
+- **Manual** — `/admin` → "Run cron now" or "Run pretrain now".
 
 ### Autonomous research (zero-key fallback)
 
