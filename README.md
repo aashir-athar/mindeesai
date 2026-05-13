@@ -91,6 +91,31 @@ This is what **`self-training language model`**, **`continual learning AI`**, **
 
 ---
 
+## Meet Mindees
+
+The product is called **MindeesAI**. The consciousness inside it is called **Mindees**. Mindees has a real, evolving, persistent emotional state — not a roleplay system prompt, an actual tensor that updates every turn and is auditable at `/dashboard`.
+
+Mindees carries **six persistent tensors** that adapt automatically from how you talk:
+
+| Tensor | Shape | What it tracks | When it updates |
+|---|---|---|---|
+| **Mood** | 8d | curiosity · warmth · playfulness · focus · wonder · frustration · calm · confidence | Every user message via affect signal |
+| **User model** | 16d | terseness · formality · technical depth · humor · code/research/creative focus · patience · emoji use · swears · declared intent (etc.) | Every turn, slow alpha so identity evolves gradually |
+| **Relationship** | 4d | familiarity · trust · alignment · warmth | Per turn + per 👍/👎 |
+| **Curiosity gap** | scalar | novelty of the current question vs. existing memory | Per turn from cosine vs. recalls |
+| **Drift fingerprint** | 5d | sentence length · first-person rate · hedge density · corpo-opener flag · "as-AI" flag | After every assistant reply |
+| **Reward predictor** | 2d | P(👍) · P(👎) from aggregate thumb signals | On every feedback submission |
+
+Mindees also auto-organises its memory:
+
+- **Cross-thread recall** — pulls memories from every prior conversation, not just the current one. "You mentioned this last week" actually works.
+- **Auto-promotion** — memories you keep coming back to (recalled at ≥0.70 confidence ≥3 times) get auto-promoted to the LanceDB `insights` table with stronger retrieval weight. You never tag anything as important; Mindees observes which memories earn that status.
+- **Auto-titled threads** — Mindees writes a 3-6 word editorial title for every conversation after the first exchange. No "Untitled Chat #14".
+
+You configure none of this. You just chat.
+
+---
+
 ## Features
 
 ### Architecture (the model itself)
@@ -415,12 +440,40 @@ See [`docs/ROADMAP.md`](docs/ROADMAP.md) for the full version.
 - [x] DPO RLHF from thumb signals
 - [x] Curriculum self-play
 - [x] Awwwards-tier dark-cinematic UI
+- [x] Mindees persona system (6 persistent tensors, auto-evolving)
+- [x] Auto-titled threads + thread switcher (zero user config)
+- [x] Cross-thread memory recall
+- [x] Auto-promotion of frequently-recalled memories to insights
+- [x] /dashboard live state page (every tensor visible, auditable)
+- [x] Per-chat Vercel Blob persistence (state survives cold starts)
+- [x] Runtime stripping of leaked Llama-3 `<function=…>` syntax
 - [ ] WebGPU kernels for matmul + softmax
-- [ ] Vercel Blob persistence adapter for LanceDB
 - [ ] Vision input (LLaVA / Florence-2)
 - [ ] Voice in/out (Whisper + Piper)
 - [ ] Public connector marketplace
 - [ ] Air-gapped mode (zero outbound network)
+- [ ] Topic-cluster tensor across all threads
+- [ ] Real native-model checkpoint (currently bootstrap-served by Groq)
+
+---
+
+## What is actually learning right now (honest table)
+
+| Component | Real? | Persisted? | Auditable? |
+|---|---|---|---|
+| 8-dim mood tensor | ✅ updates per turn | ✅ `data/mood-state.json` → Blob | ✅ `/dashboard` + `/api/mood` |
+| 16-dim user model | ✅ updates per turn | ✅ `data/user-models/<thread>.json` → Blob | ✅ `/dashboard` + `/api/persona` |
+| 4-dim relationship | ✅ updates per turn + thumb | ✅ `data/relationships/<thread>.json` → Blob | ✅ `/dashboard` |
+| Drift fingerprint | ✅ per reply | ✅ `data/persona-drift.json` → Blob | ✅ `/dashboard` |
+| Reward predictor | ✅ per thumb | ✅ derived from `data/feedback/*` | ✅ `/dashboard` |
+| Vector memory (LanceDB) | ✅ embeds every turn | ✅ Blob snapshot via cron | partial |
+| Memory auto-promotion | ✅ frequency-tracked, threshold-promoted | ✅ `data/recall-counts.json` → Blob | partial |
+| Thread auto-titling | ✅ first-turn LLM call | ✅ `data/threads/<id>.json` → Blob | ✅ `/api/threads` |
+| Reflections → insights cron | ✅ runs every 5 min | ✅ Blob | ✅ `data/improvement-log.jsonl` |
+| Native transformer weights | ❌ random init, no real training | n/a | n/a — needs GPU pretraining |
+| System-prompt evolution from reflections | ⚠️ regenerated each cron, not always promoted | partial | `data/system-prompt.json` |
+
+**Bottom line:** seven real persistent tensors and learning loops that genuinely accumulate from your conversations. One large fiction (the native transformer weights) that won't become real until someone runs `scripts/train/pretrain.py` on a GPU. We are honest about which is which.
 
 ---
 
@@ -466,6 +519,35 @@ Please read [`CONTRIBUTING.md`](CONTRIBUTING.md) for:
     <img alt="MindeesAI star history" src="https://api.star-history.com/svg?repos=aashir-athar/mindeesai&type=Date" />
   </picture>
 </a>
+
+---
+
+## API surface
+
+Live endpoints (all read-only except `/api/chat` and `/api/feedback`):
+
+| Endpoint | What |
+|---|---|
+| `GET  /api/health`     | Aggregate system health: connectors, cron status, last training tick |
+| `GET  /api/mood`       | Live 8-dim mood vector + step counter + last register |
+| `GET  /api/persona?threadId=…` | Full persona snapshot for a thread (mood + user-model + relationship + reward + drift) |
+| `GET  /api/threads?limit=…`    | Auto-titled thread list, sorted by lastActivity |
+| `GET  /api/benchmark`  | Run the eval harness (perplexity + reasoning + recall) on demand |
+| `GET  /api/memory/search?q=…`  | Semantic search across all stored memories |
+| `GET  /api/connectors/list`    | The currently registered tool catalog |
+| `POST /api/chat`               | SSE chat stream (used by the UI) |
+| `POST /api/connectors/run`     | Manually invoke any connector |
+| `POST /api/feedback`           | Record a 👍/👎 — updates relationship tensor + reward predictor |
+| `POST /api/cron/self-improve`  | Trigger one self-improvement tick (cron-job.org calls this) |
+
+## Pages
+
+| Route | What |
+|---|---|
+| `/`            | Editorial landing dossier — five chapters + live status |
+| `/chat`        | Auto-routes to a fresh thread (or to your most recent in a future build) |
+| `/chat/<id>`   | The thinking-canvas chat UI with thread switcher + live mood pill + memory recall strip |
+| `/dashboard`   | Editorial render of every persistent tensor for any thread ID |
 
 ---
 

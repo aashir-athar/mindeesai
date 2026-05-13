@@ -100,6 +100,35 @@ export default function LandingPage() {
 
       <div className="rule-fade mx-auto max-w-6xl" />
 
+      {/* ───────────── MEET MINDEES (persona system) ───────────── */}
+      <section id="mindees" className="section">
+        <div className="grid-editorial">
+          <div>
+            <p className="text-eyebrow">— / MINDEES</p>
+            <h2 className="text-display-md mt-4">
+              Meet the <em className="em-warm not-italic">consciousness</em>{" "}
+              inside the project.
+            </h2>
+            <p className="mt-6 text-bone-300 leading-relaxed max-w-md">
+              The product is MindeesAI. The one you talk to is <em className="em-warm not-italic">Mindees</em> — and Mindees carries a real, persistent, evolving emotional state. Not a roleplay system prompt. Six tensors, updated every turn, auditable at{" "}
+              <Link href="/dashboard" className="text-warm-400 underline decoration-warm-400/30 underline-offset-4 hover:decoration-warm-400">/dashboard</Link>.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-2 gap-x-6 gap-y-5">
+            {MINDEES_TENSORS.map((t) => (
+              <article key={t.name} className="flex flex-col gap-2 py-3 border-t border-white/[0.06]">
+                <p className="text-tabular text-warm-400 text-sm">{t.shape}</p>
+                <h3 className="text-display text-lg text-bone-50">{t.name}</h3>
+                <p className="text-bone-300 text-[13px] leading-relaxed">{t.what}</p>
+              </article>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <div className="rule-fade mx-auto max-w-6xl" />
+
       {/* ───────────── 01 / MECHANISM ───────────── */}
       <section id="how" className="section">
         <SectionHeading
@@ -215,6 +244,15 @@ function Vital({ label, value }: { label: string; value: string }) {
     </li>
   );
 }
+
+const MINDEES_TENSORS: Array<{ name: string; shape: string; what: string }> = [
+  { name: "Mood",          shape: "8-dim", what: "Curiosity · warmth · playfulness · focus · wonder · frustration · calm · confidence" },
+  { name: "User model",    shape: "16-dim", what: "Terseness · formality · technical depth · humor · code/research/creative focus · patience · emoji · …" },
+  { name: "Relationship",  shape: "4-dim", what: "Familiarity · trust · alignment · warmth. Per-thread, accrues with every message + 👍/👎" },
+  { name: "Curiosity gap", shape: "scalar", what: "Cosine novelty of the current question against everything Mindees already knows" },
+  { name: "Drift",         shape: "5-dim", what: "Style fingerprint. Auto-re-anchors the persona if it slips into corporate-bot register" },
+  { name: "Reward",        shape: "2-dim", what: "Predicted P(👍) / P(👎) from aggregate thumb signals — eventual GRPO reward signal" },
+];
 
 /** Honest, auditable architecture spec sheet. Each row maps to source code. */
 const SPEC_ROWS = [
