@@ -67,25 +67,8 @@ jobs:
           pip install --index-url https://download.pytorch.org/whl/cpu torch
           pip install -r scripts/train/requirements.txt
 
-      - name: Seed corpus
-        run: |
-          mkdir -p scripts/data
-          # If a real corpus isn't committed, scaffold a small editorial
-          # one so the workflow always succeeds and produces SOMETHING.
-          if [ ! -s scripts/data/corpus.txt ]; then
-            cat > scripts/data/corpus.txt <<'CORPUS'
-The model is not the world.
-The map is not the territory.
-A theory is only as good as the predictions it makes.
-Knowledge is power, but only when applied.
-We are what we repeatedly do.
-Intelligence is the ability to adapt to change.
-Curiosity precedes understanding.
-Compassion is intelligence applied to other people.
-The first principle is that you must not fool yourself.
-Patience is bitter, but its fruit is sweet.
-CORPUS
-          fi
+      - name: Ensure corpus exists
+        run: ls -lh scripts/data/corpus.txt
 
       - name: Train BPE tokenizer (if missing)
         run: |
