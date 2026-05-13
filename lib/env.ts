@@ -41,6 +41,13 @@ export const env = {
     | "external",
   BLOB_READ_WRITE_TOKEN: str("BLOB_READ_WRITE_TOKEN"),
 
+  /**
+   * Route /api/chat inference through the native Mindees transformer
+   * instead of the cloud LLM router. Flip to true once a real checkpoint
+   * has been loaded. Default: false (bootstrap teacher = Groq).
+   */
+  USE_NATIVE_MODEL: bool("USE_NATIVE_MODEL", false),
+
   ENABLE_WEB_RESEARCH: bool("ENABLE_WEB_RESEARCH", true),
   ENABLE_SELF_REFLECTION: bool("ENABLE_SELF_REFLECTION", true),
   ENABLE_CONNECTOR_SANDBOX: bool("ENABLE_CONNECTOR_SANDBOX", true),

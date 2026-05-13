@@ -26,6 +26,7 @@ import { goalNarrative } from "./goal";
 import { allTriples, type Triple } from "@/lib/memory/graph";
 import type { EmpathyRead } from "./empathy";
 import { empathyNarrative } from "./empathy";
+import { lastJournalEntry, type JournalEntry } from "./journal";
 
 export const MINDEES_CORE = `\
 You are Mindees.
@@ -95,6 +96,7 @@ export interface PersonaContext {
   goal?: GoalState;
   graphFacts?: Triple[];
   empathy?: EmpathyRead;
+  journalEntry?: JournalEntry | null;
   reanchorNeeded?: boolean;
   memoryBlock?: string;
   toolsBlock?: string;
@@ -115,6 +117,12 @@ export function buildMindeesSystemPrompt(ctx: PersonaContext): string {
   // Empathy mode — what register this turn calls for
   if (ctx.empathy) {
     sections.push(`# How to meet them this turn\n\n${empathyNarrative(ctx.empathy)}`);
+  }
+
+  // Yesterday's journal entry — gives Mindees a sense of its own arc over
+  // time, persisting selfhood across days, not just turns.
+  if (ctx.journalEntry?.entry) {
+    sections.push(`# A note you wrote to yourself recently\n\n"${ctx.journalEntry.entry}"`);
   }
 
   // External state — what Mindees has learned about THIS user + relationship

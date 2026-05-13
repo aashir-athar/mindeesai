@@ -121,3 +121,47 @@ jobs:
             data/training-metrics.jsonl
           retention-days: 30
           if-no-files-found: error
+
+      # Auto-upload the freshly trained checkpoint to Vercel Blob so the
+      # next Mindees cold start hydrates the trained weights automatically.
+      # Skipped if BLOB_READ_WRITE_TOKEN isn't set (forks / local-only).
+      - name: Push checkpoint to Vercel Blob
+        if: ${{ env.BLOB_RW_TOKEN != '' }}
+        env:
+          BLOB_RW_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
+        run: |
+          python - <<'PY'
+          import os, sys, urllib.request, urllib.error
+          token = os.environ.get("BLOB_RW_TOKEN", "")
+          if not token:
+              print("no BLOB_RW_TOKEN secret — skipping upload"); sys.exit(0)
+          targets = [
+            ("checkpoints/base.bin",        "lancedb/checkpoints/base.bin"),
+            ("tokenizer/tokenizer.json",    "data/tokenizer.json"),
+            ("data/training-metrics.jsonl", "data/training-metrics.jsonl"),
+          ]
+          uploaded = 0
+          for local, blob_path in targets:
+              if not os.path.exists(local):
+                  print(f"  skip {local} — missing"); continue
+              with open(local, "rb") as f:
+                  body = f.read()
+              req = urllib.request.Request(
+                  f"https://blob.vercel-storage.com/{blob_path}",
+                  data=body,
+                  method="PUT",
+                  headers={
+                      "Authorization": f"Bearer {token}",
+                      "x-content-type": "application/octet-stream",
+                      "x-add-random-suffix": "0",
+                      "x-allow-overwrite": "1",
+                  },
+              )
+              try:
+                  with urllib.request.urlopen(req, timeout=120) as resp:
+                      print(f"  uploaded {local} -> {blob_path} ({resp.status})")
+                      uploaded += 1
+              except urllib.error.HTTPError as e:
+                  print(f"  failed {local}: {e.code} {e.reason}")
+          print(f"\nuploaded {uploaded}/{len(targets)} files to Vercel Blob")
+          PY

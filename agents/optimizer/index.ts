@@ -17,6 +17,7 @@ import { promoteInsights } from "@/lib/memory/lancedb";
 import { consolidateMemories } from "@/lib/memory/consolidation";
 import { applyDecay as decaySkills } from "@/lib/persona/skill-mastery";
 import { idleExploreTick } from "@/lib/persona/idle-explore";
+import { maybeWriteJournalEntry } from "@/lib/persona/journal";
 import { selfImproveTick } from "@/core/mindees-mind";
 import { isoNow, nid, safeJson } from "@/lib/utils";
 import type { Reflection } from "@/lib/types";
@@ -75,6 +76,15 @@ export async function optimize(reflections: Reflection[], opts: { sinceMs: numbe
   let idleExplore = { candidatesConsidered: 0, topicsResearched: [] as string[], durationMs: 0 };
   try { idleExplore = await idleExploreTick(); } catch (e) { log.warn("idle-explore failed", e); }
 
+  // 4c. Once-a-day journal entry — Mindees writes about itself, for itself.
+  //     Gated to a 22h interval inside the function so firing every 5min
+  //     from the cron is safe and idempotent.
+  let journalEntry: { written: boolean; preview?: string } = { written: false };
+  try {
+    const entry = await maybeWriteJournalEntry();
+    if (entry) journalEntry = { written: true, preview: entry.entry.slice(0, 120) };
+  } catch (e) { log.warn("journal failed", e); }
+
   // 5. Run the native model's gradient-descent training tick
   let gradient = { loss: 0, tokens: 0, ms: 0 };
   try {
@@ -89,6 +99,7 @@ export async function optimize(reflections: Reflection[], opts: { sinceMs: numbe
     retrievalWeightsUpdated,
     consolidation,
     idleExplore,
+    journalEntry,
     gradient,
   });
 
