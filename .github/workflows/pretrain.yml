@@ -78,6 +78,53 @@ jobs:
       - name: Ensure corpus exists
         run: ls -lh scripts/data/corpus.txt
 
+      # Pull the live distillation corpus from Vercel Blob if present.
+      # The running app appends every chat turn to data/distill-corpus.jsonl
+      # and flushes it to Blob after each turn + after every cron tick. We
+      # want the LATEST version as training signal here. Best-effort:
+      # missing blob / missing token → training falls back to the seed
+      # corpus only, no failure.
+      - name: Fetch distillation corpus from Vercel Blob
+        env:
+          BLOB_RW_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
+        run: |
+          mkdir -p data
+          python - <<'PY'
+          import json, os, sys, urllib.request, urllib.error
+          token = os.environ.get("BLOB_RW_TOKEN", "")
+          if not token:
+              print("no BLOB_RW_TOKEN — skipping"); sys.exit(0)
+          # List blobs under the data/ prefix
+          req = urllib.request.Request(
+              "https://blob.vercel-storage.com/?prefix=data/distill-corpus.jsonl&limit=1",
+              headers={"Authorization": f"Bearer {token}"},
+          )
+          try:
+              with urllib.request.urlopen(req, timeout=30) as resp:
+                  data = json.loads(resp.read())
+          except urllib.error.HTTPError as e:
+              print(f"  list failed: {e.code} {e.reason}"); sys.exit(0)
+          except Exception as e:
+              print(f"  list error: {e}"); sys.exit(0)
+          blobs = data.get("blobs", [])
+          if not blobs:
+              print("  no distill-corpus.jsonl in Blob yet — training on seed corpus only")
+              sys.exit(0)
+          url = blobs[0].get("downloadUrl") or blobs[0].get("url")
+          if not url:
+              print("  blob entry has no url — skipping"); sys.exit(0)
+          try:
+              with urllib.request.urlopen(url, timeout=60) as resp:
+                  body = resp.read()
+          except Exception as e:
+              print(f"  download error: {e}"); sys.exit(0)
+          with open("data/distill-corpus.jsonl", "wb") as f:
+              f.write(body)
+          # Count lines for visibility
+          n = body.count(b"\n")
+          print(f"  fetched distill-corpus.jsonl: {n} turns ({len(body):,} bytes)")
+          PY
+
       - name: Train BPE tokenizer (if missing)
         run: |
           if [ ! -s tokenizer/tokenizer.json ]; then
