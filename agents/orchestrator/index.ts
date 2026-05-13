@@ -21,6 +21,7 @@ import {
   recallInsights,
   readThread,
 } from "@/lib/memory";
+import { persistPersonaQuick } from "@/lib/memory/persistence";
 import {
   readAffect,
   updateMood,
@@ -238,6 +239,16 @@ export async function* orchestrate(opts: {
   void recordDriftFromReply(finalAssistant.content);
 
   yield { type: "finish", message: finalAssistant };
+
+  // After the user has their final message, push the persona tensors to
+  // Vercel Blob so they persist across function cold starts. Fire-and-await
+  // — the connection stays open for ~1-2s longer but the user already has
+  // their content rendered.
+  try {
+    await persistPersonaQuick();
+  } catch (e) {
+    log.warn("persona quick-flush after chat failed", e);
+  }
 }
 
 function formatMemoryBlock(

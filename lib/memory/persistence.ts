@@ -115,6 +115,67 @@ export async function persistAfterTick(): Promise<void> {
   }
 }
 
+/**
+ * Quick persona flush — only the small JSON state files that mutate on every
+ * chat turn. Designed to run inside the /api/chat function (after the stream
+ * yields its finish event) so Blob populates within seconds of each turn,
+ * not only when the cron tick succeeds.
+ */
+export async function persistPersonaQuick(): Promise<void> {
+  if (MODE !== "vercel-blob") return;
+  if (!env.BLOB_READ_WRITE_TOKEN) return;
+
+  const personaRoots = [
+    path.join(DATA_DIR, "user-models"),
+    path.join(DATA_DIR, "relationships"),
+  ];
+  const standaloneFiles = [
+    path.join(DATA_DIR, "mood-state.json"),
+    path.join(DATA_DIR, "persona-drift.json"),
+    path.join(DATA_DIR, "replay-buffer.json"),
+  ];
+
+  try {
+    const { put } = await import("@vercel/blob");
+    let total = 0;
+    for (const root of personaRoots) {
+      const files = await walk(root);
+      for (const f of files) {
+        try {
+          const buf = await readFile(f);
+          const rel = path.relative(DATA_DIR, f).replace(/\\/g, "/");
+          await put(`data/${rel}`, buf, {
+            access: "public",
+            token: env.BLOB_READ_WRITE_TOKEN,
+            allowOverwrite: true,
+          });
+          total++;
+        } catch (e) {
+          log.warn(`persona quick-flush failed for ${f}`, e);
+        }
+      }
+    }
+    for (const f of standaloneFiles) {
+      if (!existsSync(f)) continue;
+      try {
+        const buf = await readFile(f);
+        const rel = path.relative(DATA_DIR, f).replace(/\\/g, "/");
+        await put(`data/${rel}`, buf, {
+          access: "public",
+          token: env.BLOB_READ_WRITE_TOKEN,
+          allowOverwrite: true,
+        });
+        total++;
+      } catch (e) {
+        log.warn(`persona quick-flush failed for ${f}`, e);
+      }
+    }
+    if (total > 0) log.info(`persona quick-flush: ${total} files`);
+  } catch (e) {
+    log.warn("persona quick-flush failed entirely", e);
+  }
+}
+
 async function hydrateFromBlob(): Promise<void> {
   if (!env.BLOB_READ_WRITE_TOKEN) {
     log.warn("vercel-blob persistence enabled but BLOB_READ_WRITE_TOKEN missing — starting empty");
