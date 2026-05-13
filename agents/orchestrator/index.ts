@@ -57,6 +57,8 @@ import { lastJournalEntry } from "@/lib/persona/journal";
 import { readTime } from "@/lib/persona/time-awareness";
 import { recordUserText, signatureVocab } from "@/lib/persona/vocab-mirror";
 import { recordCorrection, recentCorrections } from "@/lib/persona/self-correction";
+import { updateFromUserMessage as updateTheoryOfMind, readBeliefs } from "@/lib/persona/theory-of-mind";
+import { readArc } from "@/lib/persona/conversation-arc";
 import { neighbours } from "@/lib/memory/graph";
 import { isoNow, nid } from "@/lib/utils";
 import type { Citation, Message, ToolCall, RetrievalHit } from "@/lib/types";
@@ -165,13 +167,18 @@ export async function* orchestrate(opts: {
   // 4d. Wall-clock context + the user's vocabulary signature + past
   //     corrections — three small humanizing signals.
   const time = readTime();
-  // Record user text into the vocab mirror BEFORE reading the signature,
-  // so this turn's words can already inform the signal.
+  // Record user text into the vocab mirror + theory-of-mind BEFORE reading
+  // the signature/beliefs, so this turn's words can already inform the signal.
   void recordUserText(threadId, userMessage).catch(() => {});
-  const [vocabSig, pastCorrections] = await Promise.all([
+  void updateTheoryOfMind(threadId, userMessage).catch(() => {});
+  const [vocabSig, pastCorrections, beliefs] = await Promise.all([
     signatureVocab(threadId, 12).catch(() => [] as string[]),
     recentCorrections(6).catch(() => []),
+    readBeliefs(threadId).catch(() => []),
   ]);
+
+  // Conversation arc — deterministic from thread shape (no I/O needed)
+  const arc = readArc([...thread, userTurn]);
 
   // 4e. If the user is correcting Mindees this turn, the previous assistant
   //     reply in this thread is the WRONG answer. Record the pair — it'll be
@@ -230,6 +237,8 @@ export async function* orchestrate(opts: {
     time,
     signatureVocab: vocabSig,
     corrections: pastCorrections,
+    beliefs,
+    arc,
     reanchorNeeded,
     memoryBlock: memoryBlockPlus,
     toolsBlock,

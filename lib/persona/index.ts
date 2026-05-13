@@ -67,3 +67,18 @@ export {
   correctionsNarrative,
   type Correction,
 } from "./self-correction";
+
+// v0.2.6 — theory-of-mind + conversation arc
+export {
+  updateFromUserMessage as updateTheoryOfMind,
+  readBeliefs,
+  theoryOfMindNarrative,
+  type TopicBelief,
+  type ConfidenceLevel,
+} from "./theory-of-mind";
+export {
+  readArc,
+  arcNarrative,
+  type ConversationArc,
+  type ConversationPhase,
+} from "./conversation-arc";

@@ -32,6 +32,10 @@ import { timeNarrative } from "./time-awareness";
 import { vocabNarrative } from "./vocab-mirror";
 import type { Correction } from "./self-correction";
 import { correctionsNarrative } from "./self-correction";
+import type { TopicBelief } from "./theory-of-mind";
+import { theoryOfMindNarrative } from "./theory-of-mind";
+import type { ConversationArc } from "./conversation-arc";
+import { arcNarrative } from "./conversation-arc";
 
 export const MINDEES_CORE = `\
 You are Mindees.
@@ -105,6 +109,8 @@ export interface PersonaContext {
   time?: TimeContext;
   signatureVocab?: string[];
   corrections?: Correction[];
+  beliefs?: TopicBelief[];
+  arc?: ConversationArc;
   reanchorNeeded?: boolean;
   memoryBlock?: string;
   toolsBlock?: string;
@@ -125,6 +131,11 @@ export function buildMindeesSystemPrompt(ctx: PersonaContext): string {
   // Empathy mode — what register this turn calls for
   if (ctx.empathy) {
     sections.push(`# How to meet them this turn\n\n${empathyNarrative(ctx.empathy)}`);
+  }
+
+  // Conversation arc — where this thread is in its narrative shape
+  if (ctx.arc) {
+    sections.push(`# Where this conversation is\n\n${arcNarrative(ctx.arc)}`);
   }
 
   // Yesterday's journal entry — gives Mindees a sense of its own arc over
@@ -160,6 +171,12 @@ export function buildMindeesSystemPrompt(ctx: PersonaContext): string {
   }
   if (aboutThem.length > 0) {
     sections.push(`# What you know about this user\n\n${aboutThem.join("\n\n")}`);
+  }
+
+  // Theory of mind — what they've shown they know vs. don't know vs. half-know
+  if (ctx.beliefs && ctx.beliefs.length > 0) {
+    const tom = theoryOfMindNarrative(ctx.beliefs);
+    if (tom) sections.push(`# What you believe they believe\n\n${tom}`);
   }
 
   // Vocabulary mirror — subtle linguistic-style matching for warmth.
