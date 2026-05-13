@@ -22,6 +22,13 @@ import {
   predictReward,
 } from "@/lib/persona";
 import { getDriftState } from "@/lib/persona/drift";
+import { getSentimentArc } from "@/lib/persona/sentiment-arc";
+import { readBeliefs } from "@/lib/persona/theory-of-mind";
+import { signatureVocab } from "@/lib/persona/vocab-mirror";
+import { recentCorrections } from "@/lib/persona/self-correction";
+import { readInnerThoughts } from "@/lib/persona/inner-voice";
+import { readAffinities } from "@/lib/persona/topic-affinity";
+import { lastJournalEntry } from "@/lib/persona/journal";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -29,12 +36,19 @@ export const dynamic = "force-dynamic";
 export async function GET(req: NextRequest) {
   const threadId = req.nextUrl.searchParams.get("threadId") ?? "default";
 
-  const [mood, userModel, relationship, reward, drift] = await Promise.all([
+  const [mood, userModel, relationship, reward, drift, sentimentArc, beliefs, vocabSig, corrections, innerThoughts, affinities, journal] = await Promise.all([
     getMood(),
     getUserModel(threadId),
     getRelationship(threadId),
     predictReward(),
     getDriftState(),
+    getSentimentArc().catch(() => null),
+    readBeliefs(threadId).catch(() => []),
+    signatureVocab(threadId, 14).catch(() => []),
+    recentCorrections(6).catch(() => []),
+    readInnerThoughts(threadId, 6).catch(() => []),
+    readAffinities().catch(() => []),
+    lastJournalEntry().catch(() => null),
   ]);
 
   return NextResponse.json({
@@ -49,5 +63,17 @@ export async function GET(req: NextRequest) {
       reanchorsTriggered: drift.reanchorsTriggered,
       historyLength: drift.history.length,
     },
+    // v0.2.5+ humanizing tensors
+    sentimentArc,
+    beliefs: beliefs.slice(0, 20),
+    signatureVocab: vocabSig,
+    corrections: corrections.slice(0, 6).map((c) => ({
+      ts: c.ts,
+      wrong: c.wrong_reply.slice(0, 120),
+      correction: c.user_correction.slice(0, 200),
+    })),
+    innerThoughts,
+    affinities: affinities.slice(0, 20),
+    journalLastEntry: journal,
   });
 }

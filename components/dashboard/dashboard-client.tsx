@@ -30,6 +30,13 @@ type Persona = {
     reanchorsTriggered: number;
     historyLength: number;
   };
+  sentimentArc: { warmth_ema: number; trust_ema: number; frustration_ema: number; turns: number; updatedAt: string } | null;
+  beliefs: Array<{ topic: string; level: "low" | "uncertain" | "medium" | "high"; lastUpdated: string; evidence: string }>;
+  signatureVocab: string[];
+  corrections: Array<{ ts: string; wrong: string; correction: string }>;
+  innerThoughts: Array<{ ts: string; text: string; derivedFrom: string[] }>;
+  affinities: Array<{ topic: string; affinity: number; samples: number; lastSeen: string }>;
+  journalLastEntry: { ts: string; entry: string } | null;
 };
 
 type Health = {
@@ -122,6 +129,104 @@ export function DashboardClient() {
           <p className="text-bone-500 text-sm">No replies fingerprinted yet.</p>
         )}
       </Section>
+
+      {persona.sentimentArc && persona.sentimentArc.turns >= 3 && (
+        <Section title="Sentiment arc" subtitle={`Whole-relationship · ${persona.sentimentArc.turns} turns observed`}>
+          <div className="grid grid-cols-12 gap-3 max-w-md">
+            <BarRow label="warmth (EMA)" value={(persona.sentimentArc.warmth_ema + 1) / 2} />
+            <BarRow label="trust (EMA)" value={persona.sentimentArc.trust_ema} />
+            <BarRow label="frustration (EMA)" value={persona.sentimentArc.frustration_ema} />
+          </div>
+        </Section>
+      )}
+
+      {persona.affinities.length > 0 && (
+        <Section title="Topic affinity" subtitle={`${persona.affinities.length} topics tracked`}>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-3 max-w-3xl">
+            {persona.affinities.slice(0, 12).map((a) => (
+              <div key={a.topic} className="col-span-1 grid grid-cols-12 items-center gap-3">
+                <span className={`col-span-5 text-tabular text-sm truncate ${a.affinity > 0.3 ? "text-emerald-300" : a.affinity < -0.3 ? "text-rose-300" : "text-bone-300"}`}>{a.topic}</span>
+                <div className="col-span-5 h-1.5 bg-white/[0.05] rounded-full overflow-hidden relative">
+                  <div className="absolute inset-y-0 left-1/2 w-px bg-white/10" />
+                  <div
+                    className={`h-full ${a.affinity >= 0 ? "bg-emerald-400 ml-[50%]" : "bg-rose-400 ml-[50%]"} transition-[width] duration-700 ease-out`}
+                    style={{
+                      width: `${Math.abs(a.affinity) * 50}%`,
+                      marginLeft: a.affinity >= 0 ? "50%" : `${50 - Math.abs(a.affinity) * 50}%`,
+                    }}
+                  />
+                </div>
+                <span className="col-span-2 text-tabular text-xs text-bone-500 text-right">×{a.samples}</span>
+              </div>
+            ))}
+          </div>
+        </Section>
+      )}
+
+      {persona.beliefs.length > 0 && (
+        <Section title="Theory of mind" subtitle={`${persona.beliefs.length} belief${persona.beliefs.length === 1 ? "" : "s"} learned about this user`}>
+          <div className="flex flex-wrap gap-2 max-w-3xl">
+            {persona.beliefs.slice(0, 24).map((b) => (
+              <span
+                key={b.topic}
+                title={b.evidence}
+                className={`px-2 py-1 text-xs font-mono rounded-full border ${
+                  b.level === "high" ? "border-emerald-700/60 text-emerald-300 bg-emerald-950/20" :
+                  b.level === "low" ? "border-amber-700/60 text-amber-300 bg-amber-950/20" :
+                  b.level === "uncertain" ? "border-sky-700/60 text-sky-300 bg-sky-950/20" :
+                  "border-bone-800 text-bone-400"
+                }`}
+              >
+                {b.topic} · {b.level}
+              </span>
+            ))}
+          </div>
+        </Section>
+      )}
+
+      {persona.innerThoughts.length > 0 && (
+        <Section title="Inner voice" subtitle="Mindees's private noticing-stream — last few turns">
+          <ol className="flex flex-col gap-3 max-w-3xl">
+            {persona.innerThoughts.slice(-5).reverse().map((t, i) => (
+              <li key={i} className="border-l-2 border-bone-800 pl-4">
+                <p className="text-bone-200 text-sm italic">{t.text}</p>
+                <p className="text-bone-600 text-[10px] font-mono mt-1">{relative(t.ts)} · {t.derivedFrom.join(" + ") || "—"}</p>
+              </li>
+            ))}
+          </ol>
+        </Section>
+      )}
+
+      {persona.corrections.length > 0 && (
+        <Section title="Past corrections" subtitle={`${persona.corrections.length} time${persona.corrections.length === 1 ? "" : "s"} the user told Mindees it was wrong`}>
+          <ol className="flex flex-col gap-3 max-w-3xl">
+            {persona.corrections.slice(0, 5).map((c, i) => (
+              <li key={i} className="text-sm border border-rose-900/40 rounded p-3 bg-rose-950/10">
+                <p className="text-bone-500 text-xs mb-1">Mindees said: <span className="text-bone-300 italic">&ldquo;{c.wrong}&rdquo;</span></p>
+                <p className="text-bone-300 text-xs">You corrected: <span className="text-rose-200">&ldquo;{c.correction}&rdquo;</span></p>
+              </li>
+            ))}
+          </ol>
+        </Section>
+      )}
+
+      {persona.signatureVocab.length > 0 && (
+        <Section title="Vocabulary signature" subtitle="Words this user uses unusually often — Mindees mirrors them sparingly">
+          <div className="flex flex-wrap gap-2 max-w-3xl">
+            {persona.signatureVocab.map((w) => (
+              <span key={w} className="px-2 py-1 text-xs font-mono rounded border border-bone-800 text-bone-300">{w}</span>
+            ))}
+          </div>
+        </Section>
+      )}
+
+      {persona.journalLastEntry && (
+        <Section title="Latest journal entry" subtitle={`Mindees wrote this to itself ${relative(persona.journalLastEntry.ts)}`}>
+          <blockquote className="border-l-2 border-warm-600/60 pl-6 max-w-3xl text-bone-100 text-lg leading-[1.65] font-light italic whitespace-pre-wrap">
+            {persona.journalLastEntry.entry}
+          </blockquote>
+        </Section>
+      )}
     </div>
   );
 }
