@@ -547,7 +547,22 @@ def load_dialogue_hf(
     print(f"streaming HF dialogue: {name} split={split}, cap={max_tokens:,} tokens", file=sys.stderr)
     _vocab, by_pair = load_bpe(tokenizer_path)
 
-    ds = load_dataset(name, split=split, streaming=True, trust_remote_code=True)
+    # Recent `datasets` versions removed support for loading-script-based
+    # datasets (e.g. daily_dialog) AND removed the trust_remote_code kwarg.
+    # We try the plain Parquet path first; if THAT specific dataset fails
+    # (script-based / gated / network), we log and return empty — the
+    # training run continues on the other corpora rather than dying.
+    try:
+        ds = load_dataset(name, split=split, streaming=True)
+    except Exception as e:
+        print(f"  could not load HF dialogue '{name}': {e.__class__.__name__}: {e}", file=sys.stderr)
+        print(f"  → training will continue without this corpus. Pick a Parquet-based dataset to avoid this:", file=sys.stderr)
+        print(f"    databricks/databricks-dolly-15k  (instruction+response, small, free)", file=sys.stderr)
+        print(f"    HuggingFaceH4/ultrachat_200k     (multi-turn, large, free)", file=sys.stderr)
+        print(f"    tatsu-lab/alpaca                 (instruction-following, small)", file=sys.stderr)
+        print(f"    roneneldan/TinyStories           (narrative warmup, very small)", file=sys.stderr)
+        return torch.tensor([], dtype=torch.long), None
+
     all_ids: list[int] = []
     all_mask: list[int] = []
     n_dialogues = 0
@@ -560,36 +575,93 @@ def load_dialogue_hf(
         score = 1 if (not completion_only or role == "assistant") else 0
         all_mask.extend([score] * len(ids))
 
-    for row in ds:
-        # daily_dialog: row["dialog"] = ["Hello, how are you?", "I'm fine!", ...]
-        dialog = row.get("dialog") or row.get("dialogue")
-        # PersonaChat-style: row["utterances"][-1]["history"]
-        if not dialog and isinstance(row.get("utterances"), list) and row["utterances"]:
-            last = row["utterances"][-1]
-            if isinstance(last, dict) and isinstance(last.get("history"), list):
-                dialog = last["history"]
-        # empathetic_dialogues: row["context"] + row["utterance"]
-        if not dialog and row.get("context") and row.get("utterance"):
-            dialog = [str(row["context"]), str(row["utterance"])]
-        # TinyStories: single text — treat as one assistant turn
-        if not dialog and row.get("text"):
-            text = str(row["text"])
-            if text.strip():
-                append_turn(text, "assistant")
-                if len(all_ids) >= max_tokens:
-                    break
-            continue
+    try:
+        for row in ds:
+            dialog = None
+            # 1. daily_dialog-style: row["dialog"] = ["turn1", "turn2", ...]
+            dialog = row.get("dialog") or row.get("dialogue")
 
-        if not isinstance(dialog, list):
-            continue
-        for i, turn in enumerate(dialog):
-            if not isinstance(turn, str) or not turn.strip():
+            # 2. messages-format (UltraChat, ShareGPT, OpenAssistant filtered):
+            #    row["messages"] = [{"role": "user|assistant", "content": "..."}, ...]
+            if not dialog and isinstance(row.get("messages"), list):
+                msgs = row["messages"]
+                for m in msgs:
+                    if not isinstance(m, dict):
+                        continue
+                    role = "user" if str(m.get("role", "")).lower() in ("user", "human", "prompter") else "assistant"
+                    content = str(m.get("content", "")).strip()
+                    if content:
+                        append_turn(content, role)
+                if msgs:
+                    n_dialogues += 1
+                    if len(all_ids) >= max_tokens:
+                        break
+                    continue
+
+            # 3. Dolly / Alpaca-style: row["instruction"] + row["response"]
+            if not dialog and (row.get("instruction") or row.get("prompt")):
+                user_text = str(row.get("instruction") or row.get("prompt") or "").strip()
+                ctx = str(row.get("context") or row.get("input") or "").strip()
+                if ctx:
+                    user_text = f"{user_text}\n\n{ctx}"
+                asst_text = str(row.get("response") or row.get("output") or row.get("completion") or "").strip()
+                if user_text and asst_text:
+                    append_turn(user_text, "user")
+                    append_turn(asst_text, "assistant")
+                    n_dialogues += 1
+                    if len(all_ids) >= max_tokens:
+                        break
                 continue
-            role = "user" if i % 2 == 0 else "assistant"
-            append_turn(turn.strip(), role)
-        n_dialogues += 1
-        if len(all_ids) >= max_tokens:
-            break
+
+            # 4. PersonaChat: row["utterances"][-1]["history"]
+            if not dialog and isinstance(row.get("utterances"), list) and row["utterances"]:
+                last = row["utterances"][-1]
+                if isinstance(last, dict) and isinstance(last.get("history"), list):
+                    dialog = last["history"]
+
+            # 5. empathetic_dialogues: row["context"] + row["utterance"]
+            if not dialog and row.get("context") and row.get("utterance"):
+                dialog = [str(row["context"]), str(row["utterance"])]
+
+            # 6. hh-rlhf: row["chosen"] is embedded "Human: ... Assistant: ..." text
+            if not dialog and isinstance(row.get("chosen"), str):
+                chosen = row["chosen"]
+                # Split on the two markers, alternate roles
+                import re as _re
+                parts = _re.split(r"\n*(?:Human|Assistant)\s*:\s*", chosen)
+                parts = [p.strip() for p in parts if p.strip()]
+                if len(parts) >= 2:
+                    for i, p in enumerate(parts):
+                        role = "user" if i % 2 == 0 else "assistant"
+                        append_turn(p, role)
+                    n_dialogues += 1
+                    if len(all_ids) >= max_tokens:
+                        break
+                continue
+
+            # 7. TinyStories: single text → one assistant turn
+            if not dialog and row.get("text"):
+                text = str(row["text"]).strip()
+                if text:
+                    append_turn(text, "assistant")
+                    if len(all_ids) >= max_tokens:
+                        break
+                continue
+
+            if not isinstance(dialog, list):
+                continue
+            for i, turn in enumerate(dialog):
+                if not isinstance(turn, str) or not turn.strip():
+                    continue
+                role = "user" if i % 2 == 0 else "assistant"
+                append_turn(turn.strip(), role)
+            n_dialogues += 1
+            if len(all_ids) >= max_tokens:
+                break
+    except Exception as e:
+        print(f"  HF dialogue iteration failed mid-stream: {e.__class__.__name__}: {e}", file=sys.stderr)
+        if not all_ids:
+            return torch.tensor([], dtype=torch.long), None
 
     if not all_ids:
         return torch.tensor([], dtype=torch.long), None
@@ -617,15 +689,23 @@ def load_hf_streaming(name: str, config: str | None, split: str, tokenizer_path:
         return torch.tensor([], dtype=torch.long)
     print(f"streaming HF dataset: {name} ({config or 'default'}) split={split}, cap={max_tokens:,} tokens", file=sys.stderr)
     _vocab, by_pair = load_bpe(tokenizer_path)
-    ds = load_dataset(name, config, split=split, streaming=True) if config else load_dataset(name, split=split, streaming=True)
+    try:
+        ds = load_dataset(name, config, split=split, streaming=True) if config else load_dataset(name, split=split, streaming=True)
+    except Exception as e:
+        print(f"  could not load HF dataset '{name}': {e.__class__.__name__}: {e}", file=sys.stderr)
+        print(f"  → training continues without this stream.", file=sys.stderr)
+        return torch.tensor([], dtype=torch.long)
     ids: list[int] = []
-    for row in ds:
-        text = row.get("text") or row.get("content") or ""
-        if not isinstance(text, str) or not text.strip():
-            continue
-        ids.extend(tokenize(text + "\n", by_pair))
-        if len(ids) >= max_tokens:
-            break
+    try:
+        for row in ds:
+            text = row.get("text") or row.get("content") or ""
+            if not isinstance(text, str) or not text.strip():
+                continue
+            ids.extend(tokenize(text + "\n", by_pair))
+            if len(ids) >= max_tokens:
+                break
+    except Exception as e:
+        print(f"  HF stream iteration failed: {e.__class__.__name__}: {e}", file=sys.stderr)
     print(f"  hf {name}: {len(ids):,} tokens", file=sys.stderr)
     return torch.tensor(ids, dtype=torch.long)
 

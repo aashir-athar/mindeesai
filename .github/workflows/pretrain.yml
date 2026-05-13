@@ -45,9 +45,9 @@ on:
         required: false
         default: '500000'
       dialogue_dataset:
-        description: 'Public HF human-dialogue dataset to mix in (daily_dialog / facebook/empathetic_dialogues / etc). Empty to skip.'
+        description: 'Public HF Parquet dialogue/instruction dataset (databricks/databricks-dolly-15k | HuggingFaceH4/ultrachat_200k | tatsu-lab/alpaca | roneneldan/TinyStories). Empty to skip.'
         required: false
-        default: 'daily_dialog'
+        default: 'databricks/databricks-dolly-15k'
   push:
     branches:
       - 'train/**'
@@ -154,7 +154,7 @@ jobs:
             HF_ARGS="--hf-dataset $HF_DS --hf-max-tokens $HF_MAX --hf-weight 2.0"
           fi
           DIALOGUE_ARGS=""
-          DIALOGUE_DS="${{ github.event.inputs.dialogue_dataset || 'daily_dialog' }}"
+          DIALOGUE_DS="${{ github.event.inputs.dialogue_dataset || 'databricks/databricks-dolly-15k' }}"
           if [ -n "$DIALOGUE_DS" ]; then
             DIALOGUE_ARGS="--dialogue-dataset $DIALOGUE_DS --dialogue-weight 3.0 --dialogue-max-tokens 1500000"
           fi
