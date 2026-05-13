@@ -44,6 +44,10 @@ on:
         description: 'Cap on tokens streamed from HF (RAM bound)'
         required: false
         default: '500000'
+      dialogue_dataset:
+        description: 'Public HF human-dialogue dataset to mix in (daily_dialog / facebook/empathetic_dialogues / etc). Empty to skip.'
+        required: false
+        default: 'daily_dialog'
   push:
     branches:
       - 'train/**'
@@ -149,6 +153,11 @@ jobs:
           if [ -n "$HF_DS" ]; then
             HF_ARGS="--hf-dataset $HF_DS --hf-max-tokens $HF_MAX --hf-weight 2.0"
           fi
+          DIALOGUE_ARGS=""
+          DIALOGUE_DS="${{ github.event.inputs.dialogue_dataset || 'daily_dialog' }}"
+          if [ -n "$DIALOGUE_DS" ]; then
+            DIALOGUE_ARGS="--dialogue-dataset $DIALOGUE_DS --dialogue-weight 3.0 --dialogue-max-tokens 1500000"
+          fi
           DISTILL_ARGS=""
           if [ -s data/distill-corpus.jsonl ]; then
             DISTILL_ARGS="--distill-corpus data/distill-corpus.jsonl"
@@ -171,6 +180,7 @@ jobs:
             --persona-loss-weight 0.05 \
             $DISTILL_ARGS \
             $HF_ARGS \
+            $DIALOGUE_ARGS \
             --log data/training-metrics.jsonl \
             --out checkpoints/base.bin \
             --torch-ckpt checkpoints/torch-resume.pt

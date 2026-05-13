@@ -516,6 +516,90 @@ def load_distill_corpus(path: str, tokenizer_path: str, device, completion_only:
     return ids, mask
 
 
+def load_dialogue_hf(
+    name: str,
+    split: str,
+    tokenizer_path: str,
+    max_tokens: int = 2_000_000,
+    completion_only: bool = True,
+) -> tuple[torch.Tensor, torch.Tensor | None]:
+    """Stream a public human-dialogue dataset and format as chat template.
+
+    Free, key-less HuggingFace datasets known to be high-quality for
+    teaching a model how real humans talk:
+
+      - ``daily_dialog``                       — 13K open-domain dialogues
+      - ``facebook/empathetic_dialogues``      — emotion-grounded responses
+      - ``bavard/personachat_truecased``       — PersonaChat
+      - ``roneneldan/TinyStories``             — narrative warmup
+
+    Each row's dialogue is rendered as alternating <user>...</user>
+    <assistant>...</assistant> turns. When completion_only=True, the
+    loss mask scores ONLY the assistant turns (the same SFT canonical
+    setup the distill corpus uses).
+    """
+    try:
+        from datasets import load_dataset  # type: ignore
+    except ImportError:
+        print(f"  dialogue requested for {name} but `datasets` not installed — skipping", file=sys.stderr)
+        return torch.tensor([], dtype=torch.long), None
+
+    print(f"streaming HF dialogue: {name} split={split}, cap={max_tokens:,} tokens", file=sys.stderr)
+    _vocab, by_pair = load_bpe(tokenizer_path)
+
+    ds = load_dataset(name, split=split, streaming=True, trust_remote_code=True)
+    all_ids: list[int] = []
+    all_mask: list[int] = []
+    n_dialogues = 0
+
+    def append_turn(text: str, role: str) -> None:
+        token_str = f"<{role}>{text}</{role}>\n"
+        ids = tokenize(token_str, by_pair)
+        all_ids.extend(ids)
+        # Score assistant tokens only when completion_only is on
+        score = 1 if (not completion_only or role == "assistant") else 0
+        all_mask.extend([score] * len(ids))
+
+    for row in ds:
+        # daily_dialog: row["dialog"] = ["Hello, how are you?", "I'm fine!", ...]
+        dialog = row.get("dialog") or row.get("dialogue")
+        # PersonaChat-style: row["utterances"][-1]["history"]
+        if not dialog and isinstance(row.get("utterances"), list) and row["utterances"]:
+            last = row["utterances"][-1]
+            if isinstance(last, dict) and isinstance(last.get("history"), list):
+                dialog = last["history"]
+        # empathetic_dialogues: row["context"] + row["utterance"]
+        if not dialog and row.get("context") and row.get("utterance"):
+            dialog = [str(row["context"]), str(row["utterance"])]
+        # TinyStories: single text — treat as one assistant turn
+        if not dialog and row.get("text"):
+            text = str(row["text"])
+            if text.strip():
+                append_turn(text, "assistant")
+                if len(all_ids) >= max_tokens:
+                    break
+            continue
+
+        if not isinstance(dialog, list):
+            continue
+        for i, turn in enumerate(dialog):
+            if not isinstance(turn, str) or not turn.strip():
+                continue
+            role = "user" if i % 2 == 0 else "assistant"
+            append_turn(turn.strip(), role)
+        n_dialogues += 1
+        if len(all_ids) >= max_tokens:
+            break
+
+    if not all_ids:
+        return torch.tensor([], dtype=torch.long), None
+
+    ids = torch.tensor(all_ids, dtype=torch.long)
+    mask = torch.tensor(all_mask, dtype=torch.float32) if completion_only else None
+    print(f"  dialogue {name}: {n_dialogues} conversations → {len(ids):,} tokens (completion_only={completion_only})", file=sys.stderr)
+    return ids, mask
+
+
 def load_hf_streaming(name: str, config: str | None, split: str, tokenizer_path: str, max_tokens: int = 2_000_000) -> torch.Tensor:
     """Pull from a HuggingFace dataset in streaming mode (no full download).
 
@@ -665,6 +749,11 @@ def main():
     ap.add_argument("--hf-max-tokens", type=int, default=2_000_000)
     ap.add_argument("--completion-only-loss", type=int, default=1, help="1 = score only assistant-response tokens in distill corpus (canonical SFT); 0 = score all tokens")
     ap.add_argument("--persona-loss-weight", type=float, default=0.05, help="Weight on the persona-loss regularizer that suppresses banned-phrase tokens (e.g. 'as an AI'). Set to 0 to disable.")
+    # Public human-dialogue corpus (free HF datasets)
+    ap.add_argument("--dialogue-dataset", default=None, help="HuggingFace dialogue dataset name (e.g. 'daily_dialog'). Streamed, formatted as chat-template turns.")
+    ap.add_argument("--dialogue-split", default="train")
+    ap.add_argument("--dialogue-weight", type=float, default=3.0)
+    ap.add_argument("--dialogue-max-tokens", type=int, default=1_500_000)
     args = ap.parse_args()
 
     torch.manual_seed(args.seed)
@@ -717,6 +806,21 @@ def main():
                 StreamingTextDataset(hf_ids, cfg.context_length),
                 args.hf_weight,
                 f"hf:{args.hf_dataset}({len(hf_ids):,}tok)",
+            ))
+
+    if args.dialogue_dataset:
+        dlg_ids, dlg_mask = load_dialogue_hf(
+            args.dialogue_dataset, args.dialogue_split,
+            args.tokenizer, max_tokens=args.dialogue_max_tokens,
+            completion_only=bool(args.completion_only_loss),
+        )
+        if dlg_ids.numel() > 2 * cfg.context_length + 4:
+            dlg_ids = dlg_ids.to(device)
+            dlg_mask_dev = dlg_mask.to(device) if dlg_mask is not None else None
+            sources.append((
+                StreamingTextDataset(dlg_ids, cfg.context_length, dlg_mask_dev),
+                args.dialogue_weight,
+                f"dialogue:{args.dialogue_dataset}({len(dlg_ids):,}tok,mask={dlg_mask_dev is not None})",
             ))
 
     train_ds = MixedSampler(sources)
