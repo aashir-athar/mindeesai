@@ -22,12 +22,15 @@ import { nid } from "@/lib/utils";
 import { CitationPill } from "./citation-pill";
 import { MessageMarkdown } from "./message-markdown";
 
+type RecalledMemory = { text: string; score: number; source?: string };
+
 type Exchange = {
   id: string;
   question: string;
   answer: string;
   citations: Citation[];
   toolActivity: Array<{ name: string; ok: boolean; ms: number }>;
+  recalled?: RecalledMemory[];
   reasoning?: string;
   stage?: string;
 };
@@ -142,6 +145,8 @@ export function ChatCanvas({ threadId }: { threadId: string }) {
             // Update the floating mood pill — not per-exchange, it's global state
             if ((data as { mood?: MoodSnapshot }).mood) setMood((data as { mood: MoodSnapshot }).mood);
             return x;
+          case "memories":
+            return { ...x, recalled: (data as unknown as { recalled: RecalledMemory[] }).recalled };
           case "reasoning":
             return { ...x, reasoning: (x.reasoning ?? "") + (data.text ?? "") };
           case "text":
@@ -245,6 +250,10 @@ function ExchangeCard({ exchange, threadId }: { exchange: Exchange; threadId: st
         </div>
 
         {exchange.reasoning && <ReasoningDisclosure text={exchange.reasoning} />}
+
+        {exchange.recalled && exchange.recalled.length > 0 && (
+          <MemoryRecallStrip recalled={exchange.recalled} />
+        )}
 
         <div className="prose prose-invert max-w-none">
           {exchange.answer ? (
@@ -399,6 +408,33 @@ function EmptyState() {
         ))}
       </div>
     </article>
+  );
+}
+
+/**
+ * MemoryRecallStrip — surfaces what Mindees actually remembered for this turn.
+ * Makes long-term memory tangible: if you see prior snippets here, that's
+ * proof retrieval is working.
+ */
+function MemoryRecallStrip({ recalled }: { recalled: RecalledMemory[] }) {
+  return (
+    <details className="group rounded-xl border border-white/[0.06] bg-warm-400/[0.03] px-4 py-3">
+      <summary className="cursor-pointer select-none text-eyebrow inline-flex items-center gap-2 hover:text-warm-400 transition-colors">
+        <span className="size-1.5 rounded-full bg-warm-400" />
+        I remembered {recalled.length} thing{recalled.length === 1 ? "" : "s"} for this
+      </summary>
+      <ul className="mt-3 flex flex-col gap-2 text-[13px] text-bone-200 leading-relaxed">
+        {recalled.map((r, i) => (
+          <li key={i} className="flex gap-2">
+            <span className="text-warm-400 text-tabular text-xs mt-1 shrink-0">{(r.score * 100).toFixed(0)}%</span>
+            <span className="flex-1">
+              <span className="line-clamp-2">{r.text}</span>
+              <span className="text-eyebrow !text-bone-500 ml-2">— {r.source}</span>
+            </span>
+          </li>
+        ))}
+      </ul>
+    </details>
   );
 }
 
