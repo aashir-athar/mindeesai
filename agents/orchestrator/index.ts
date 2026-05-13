@@ -1,22 +1,14 @@
 /**
  * The Orchestrator — Mindees' main response loop.
  *
- * Inference path:
- *   - All generation goes through `lib/llm/router.streamLLM` (Groq today,
- *     swappable to the native model once a checkpoint exists).
- *   - NO reasoning-mode branch — that path used the random-weight native
- *     model and stalled requests until timeout. It's commented out below
- *     and will be re-enabled the day the native checkpoint lands.
+ * Inference: streamLLM (Groq today, native model when checkpointed).
+ * Persona:   five persistent tensors updated per turn —
+ *              mood (8d), user model (16d), relationship (4d),
+ *              curiosity gap (scalar), drift fingerprint (5d).
+ *            Plus a reward predictor from accumulated thumb signals.
  *
- * Persona:
- *   Every request reads + updates the Mindees mood tensor (8-dim, persistent)
- *   and injects the persona system prompt with current emotional state.
- *   This is what turns the LLM's default register into something that sounds
- *   like an actual continuous entity instead of a fresh model on every turn.
- *
- * Tool-calling:
- *   Providers' native function-calling protocol; surfaced as `tool-call`
- *   chunks the orchestrator runs and feeds back as `tool` messages.
+ * Every tensor is real persistent state. None of this is roleplay theatre —
+ * each value can be inspected at /api/mood, /api/persona, etc.
  */
 
 import { streamLLM } from "@/lib/llm/router";
@@ -29,7 +21,20 @@ import {
   recallInsights,
   readThread,
 } from "@/lib/memory";
-import { readAffect, updateMood, buildMindeesSystemPrompt } from "@/lib/persona";
+import {
+  readAffect,
+  updateMood,
+  getUserModel,
+  applyTurnToUserModel,
+  persistUserModel,
+  getRelationship,
+  applyTurnToRelationship,
+  persistRelationship,
+  curiosityGap,
+  recordDriftFromReply,
+  predictReward,
+  buildMindeesSystemPrompt,
+} from "@/lib/persona";
 import { isoNow, nid } from "@/lib/utils";
 import type { Citation, Message, ToolCall, RetrievalHit } from "@/lib/types";
 import { createLogger } from "@/lib/logger";
@@ -56,7 +61,7 @@ export async function* orchestrate(opts: {
 }): AsyncIterable<OrchestratorEvent> {
   const { threadId, userMessage, signal, user, modelId } = opts;
 
-  // 1. Append user turn (sync — needed before recall so the new message is in history)
+  // 1. Append user turn
   const userTurn: Message = {
     id: nid(),
     role: "user",
@@ -65,45 +70,82 @@ export async function* orchestrate(opts: {
   };
   await appendMessage(threadId, userTurn);
 
-  // 2. Update Mindees' mood tensor with this turn's affect — BEFORE generating
-  //    so the system prompt reflects the current emotional state.
+  // 2. Read affect → update all per-turn tensors in parallel
   const affect = readAffect(userMessage);
-  const mood = await updateMood(affect);
-  yield { type: "mood", mood: { values: mood.values, steps: mood.steps, lastRegister: mood.lastRegister } };
+  const [mood, userModelPrev, relPrev] = await Promise.all([
+    updateMood(affect),
+    getUserModel(threadId),
+    getRelationship(threadId),
+  ]);
 
+  // Running average user-message length, used by the user model
+  const thread = await readThread(threadId);
+  const userMessages = [...thread, userTurn].filter((m) => m.role === "user");
+  const runningAvgLen =
+    userMessages.reduce((sum, m) => sum + m.content.length, 0) / Math.max(1, userMessages.length);
+
+  const userModelNext = applyTurnToUserModel(userModelPrev, {
+    text: userMessage,
+    affect,
+    runningAvgLen,
+  });
+  const relationshipNext = applyTurnToRelationship(relPrev, affect);
+
+  // Persist — async, don't block the response
+  void persistUserModel(userModelNext);
+  void persistRelationship(relationshipNext);
+
+  yield { type: "mood", mood: { values: mood.values, steps: mood.steps, lastRegister: mood.lastRegister } };
   yield { type: "stage", stage: "context" };
 
-  // 3. Assemble context in parallel
-  const thread = await readThread(threadId);
+  // 3. Retrieve memories + insights + curiosity gap from those scores
   const [memoryHits, insightHits] = await Promise.all([
     recall(userMessage, 6, threadId).catch(() => [] as RetrievalHit[]),
     recallInsights(userMessage, 4).catch(() => [] as RetrievalHit[]),
   ]);
   const memoryBlock = formatMemoryBlock(memoryHits, insightHits);
+  const curiosity = curiosityGap(memoryHits);
 
-  // 4. Build the Mindees system prompt — persona + current mood + memory + tools
+  // 4. Aggregate reward signal from historical thumbs (cached)
+  const reward = await predictReward();
+
+  // 5. Get the prior drift state so we can re-anchor if needed
+  //    (we check the state from the PREVIOUS reply — the new reply will be
+  //    measured at end-of-turn and stored for next time)
+  let reanchorNeeded = false;
+  try {
+    const { getDriftState, fingerprint, distance: dfn } = await import("@/lib/persona/drift");
+    const drift = await getDriftState();
+    const last = drift.history.at(-1);
+    if (last) {
+      reanchorNeeded = last.asAiFlag === 1 || last.corpoOpenerFlag === 1 || dfn(last) > 0.9;
+    }
+    void fingerprint; // referenced for completeness
+  } catch { /* ignore */ }
+
+  // 6. Compose the Mindees system prompt with EVERY tensor narrated in
   const registry = await getRegistry();
   const toolGuidance = [...registry.values()]
     .filter((c) => c.prompt)
     .map((c) => `### ${c.manifest.name}\n${c.prompt}`)
     .join("\n\n");
-  const toolsBlock = toolGuidance
-    ? `# Tool-specific guidance\n${toolGuidance}`
-    : undefined;
+  const toolsBlock = toolGuidance ? `# Tool-specific guidance\n${toolGuidance}` : undefined;
 
   const systemPrompt = buildMindeesSystemPrompt({
     mood,
+    user: userModelNext,
+    relationship: relationshipNext,
+    curiosity,
+    reward,
+    reanchorNeeded,
     memoryBlock,
     toolsBlock,
   });
 
   const tools = await listTools();
-
-  // 5. Conversation history — last 12 turns
   const history: Message[] = [...thread, userTurn].slice(-13);
 
-  // 6. Tool-call loop — streams text directly to the UI, runs connectors when
-  //    the model emits structured tool_calls.
+  // 7. Tool-call loop
   let aggregatedText = "";
   const citations: Citation[] = [];
   let conversation: Message[] = history;
@@ -121,7 +163,7 @@ export async function* orchestrate(opts: {
       system: systemPrompt,
       tools,
       signal,
-      thinking: false, // never trigger native-model reasoning path
+      thinking: false,
     })) {
       if (signal.aborted) break;
       if (chunk.type === "text" && chunk.text) {
@@ -141,11 +183,7 @@ export async function* orchestrate(opts: {
     if (pendingTools.length === 0) break;
 
     const assistantToolTurn: Message = {
-      id: nid(),
-      role: "assistant",
-      content: hopText,
-      toolCalls: pendingTools,
-      createdAt: isoNow(),
+      id: nid(), role: "assistant", content: hopText, toolCalls: pendingTools, createdAt: isoNow(),
     };
     conversation = [...conversation, assistantToolTurn];
 
@@ -176,18 +214,12 @@ export async function* orchestrate(opts: {
 
       conversation = [
         ...conversation,
-        {
-          id: nid(),
-          role: "tool",
-          content,
-          toolCallId: tc.id,
-          createdAt: isoNow(),
-        },
+        { id: nid(), role: "tool", content, toolCallId: tc.id, createdAt: isoNow() },
       ];
     }
   }
 
-  // 7. Persist final turn + memory
+  // 8. Finalize: persist turn, update memory, record drift fingerprint
   const finalAssistant: Message = {
     id: nid(),
     role: "assistant",
@@ -203,14 +235,14 @@ export async function* orchestrate(opts: {
     { id: finalAssistant.id, text: finalAssistant.content, threadId, role: "assistant", source: "conversation", createdAt: finalAssistant.createdAt },
   ]).catch((e) => log.warn("memory write failed", e));
 
+  void recordDriftFromReply(finalAssistant.content);
+
   yield { type: "finish", message: finalAssistant };
 }
 
-// ─── helpers ──────────────────────────────────────────────────────────────────
-
 function formatMemoryBlock(
-  memoryHits: Awaited<ReturnType<typeof recall>>,
-  insightHits: Awaited<ReturnType<typeof recallInsights>>,
+  memoryHits: RetrievalHit[],
+  insightHits: RetrievalHit[],
 ): string {
   const lines: string[] = [];
   if (insightHits.length > 0) {

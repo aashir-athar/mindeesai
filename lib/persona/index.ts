@@ -1,10 +1,5 @@
 /**
  * Public persona API — barrel module the orchestrator imports from.
- *
- * Usage:
- *   const affect = readAffect(userMessage);
- *   const mood   = await updateMood(affect);            // persist + return new
- *   const prompt = buildMindeesSystemPrompt({ mood, memoryBlock, toolsBlock });
  */
 
 export { readAffect, type AffectSignal } from "./affect";
@@ -18,3 +13,32 @@ export {
   type MoodDim,
 } from "./mood";
 export { MINDEES_CORE, buildMindeesSystemPrompt, type PersonaContext } from "./mindees";
+
+// Tensors added in v0.2.2
+export {
+  USER_DIMS,
+  getUserModel,
+  applyTurn as applyTurnToUserModel,
+  persistUserModel,
+  userModelNarrative,
+  type UserDim,
+  type UserModel,
+} from "./user-model";
+export {
+  getRelationship,
+  applyTurn as applyTurnToRelationship,
+  applyThumb,
+  persistRelationship,
+  relationshipNarrative,
+  type Relationship,
+} from "./relationship";
+export { curiosityGap, curiosityNarrative, type CuriosityGap } from "./curiosity";
+export {
+  fingerprint,
+  distance as driftDistance,
+  recordReply as recordDriftFromReply,
+  REANCHOR_INSTRUCTION,
+  type DriftFingerprint,
+  type DriftState,
+} from "./drift";
+export { predictReward, rewardNarrative, type RewardEstimate } from "./reward";

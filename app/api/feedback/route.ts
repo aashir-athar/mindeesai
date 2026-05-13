@@ -1,16 +1,17 @@
 /**
  * POST /api/feedback
  *
- * Records a thumb up/down on an assistant message. The next cron tick will
- * pair ups and downs from the same thread into DPO preference samples that
- * directly tune the model's weights.
+ * Records a thumb up/down. Updates BOTH:
+ *   1. The DPO-pair backlog (recordThumb → data/feedback/*.jsonl)
+ *   2. The per-thread relationship tensor's trust dimension
  *
- * Request:  { threadId, messageId, signal: "up" | "down" }
+ * Body: { threadId, messageId, signal: "up" | "down" }
  */
 
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { recordThumb } from "@/core/mindees-mind/train/rlhf";
+import { getRelationship, applyThumb, persistRelationship } from "@/lib/persona";
 
 export const runtime = "nodejs";
 
@@ -27,6 +28,13 @@ export async function POST(req: NextRequest) {
   } catch (e) {
     return NextResponse.json({ ok: false, error: "invalid body", detail: String(e) }, { status: 400 });
   }
-  await recordThumb({ ...body, createdAt: new Date().toISOString() });
+
+  // Persist for DPO + relationship-tensor update — in parallel
+  const rel = await getRelationship(body.threadId);
+  await Promise.all([
+    recordThumb({ ...body, createdAt: new Date().toISOString() }),
+    persistRelationship(applyThumb(rel, body.signal)),
+  ]);
+
   return NextResponse.json({ ok: true });
 }

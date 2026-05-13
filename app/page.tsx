@@ -1,25 +1,33 @@
 /**
- * Landing page — Awwwards-tier dark cinematic, editorial typography, horizontal
- * scroll feature canvas.
+ * Landing — editorial dossier.
  *
- * Sections (in order):
- *   1. Hero          — bold display headline + value prop + primary CTA
- *   2. Live status   — proves the model is actually training right now
- *   3. How it works  — three-step explainer
- *   4. Features      — horizontally scrollable canvas of feature cards
- *   5. Philosophy    — text block with the design/engineering ethos
- *   6. CTA           — secondary call to clone the repo
- *   7. Footer        — minimal, with GitHub link
+ *   Hero            — single typographic statement + dossier strip
+ *   01 / Mechanism  — how the model rewires itself, four moves
+ *   02 / Specs      — architecture spec sheet
+ *   03 / Features   — horizontal capability canvas
+ *   04 / Philosophy — pull quote
+ *   05 / Start      — primary CTA
+ *   Footer          — Swiss-grid colophon
  */
 
 import Link from "next/link";
-import { headlines, lossAversion, authority, reciprocity, specificity } from "@/lib/psychology/copywriting";
-import { HeroOrb } from "@/components/marketing/hero-orb";
-import { LiveStatus } from "@/components/marketing/live-status";
+import { ArrowUpRight, Sparkles } from "lucide-react";
+import { Nav } from "@/components/marketing/nav";
+import { AuroraWash } from "@/components/marketing/aurora-wash";
+import { DossierStrip } from "@/components/marketing/dossier-strip";
+import { SectionHeading } from "@/components/marketing/section-heading";
+import { SpecsTable } from "@/components/marketing/specs-table";
+import { PullQuote } from "@/components/marketing/pull-quote";
 import { FeatureCanvas } from "@/components/marketing/feature-canvas";
-import { ArrowUpRight, GitBranch, Sparkles } from "lucide-react";
+import { SiteFooter } from "@/components/marketing/site-footer";
+import {
+  masthead,
+  hero,
+  sections,
+  philosophyQuote,
+} from "@/lib/psychology/copywriting";
 
-// lucide-react no longer ships a Github brand icon; render inline SVG instead.
+// lucide-react v1 dropped brand icons; render GitHub inline.
 function GithubIcon({ className = "size-4" }: { className?: string }) {
   return (
     <svg viewBox="0 0 24 24" fill="currentColor" className={className} aria-hidden>
@@ -27,182 +35,202 @@ function GithubIcon({ className = "size-4" }: { className?: string }) {
     </svg>
   );
 }
-void GitBranch;
 
 export default function LandingPage() {
   return (
-    <main className="relative isolate min-h-dvh overflow-x-clip">
-      {/* Top nav */}
-      <header className="fixed top-0 inset-x-0 z-50">
-        <nav className="mx-auto max-w-7xl px-6 md:px-10 py-5 flex items-center justify-between">
-          <Link href="/" className="flex items-center gap-2 group">
-            <span className="size-2 rounded-full bg-aurora-400 pulse-dot" aria-hidden />
-            <span className="text-sm tracking-tight font-medium">MindeesAI</span>
-          </Link>
-          <div className="hidden md:flex items-center gap-7 text-sm text-bone-300">
-            <Link href="#how" className="hover:text-bone-100 transition-colors">How it works</Link>
-            <Link href="#features" className="hover:text-bone-100 transition-colors">Features</Link>
-            <Link href="#philosophy" className="hover:text-bone-100 transition-colors">Philosophy</Link>
-            <Link
-              href="https://github.com/aashir-athar/mindeesai"
-              className="inline-flex items-center gap-1.5 hover:text-bone-100 transition-colors"
-              target="_blank"
-              rel="noreferrer"
-            >
-              <GithubIcon className="size-4" />
-              GitHub
-            </Link>
+    <main className="relative isolate min-h-dvh">
+      <Nav />
+
+      {/* ───────────── HERO ───────────── */}
+      <section className="relative pt-40 md:pt-56 pb-28 md:pb-32">
+        <AuroraWash />
+
+        <div className="section !pt-0 !pb-0">
+          <div className="grid grid-cols-12 gap-y-12 md:gap-x-12">
+            <div className="col-span-12 md:col-span-9">
+              <p className="text-eyebrow reveal">
+                {masthead.volume} &nbsp;/&nbsp; {hero.kicker} &nbsp;/&nbsp; {masthead.status}
+              </p>
+
+              <h1 className="text-display-xl mt-8 reveal reveal-delay-1 max-w-[18ch]">
+                {hero.title.line1}{" "}
+                <em className="em-warm not-italic block md:inline">{hero.title.em}</em>
+              </h1>
+
+              <p className="mt-10 max-w-2xl text-lg md:text-xl text-bone-200 leading-relaxed reveal reveal-delay-2">
+                {hero.lede}
+              </p>
+
+              <div className="mt-12 flex flex-wrap items-center gap-3 reveal reveal-delay-3">
+                <Link href="/chat" className="btn btn-primary">
+                  <Sparkles className="size-4" />
+                  {hero.ctaPrimary}
+                  <ArrowUpRight className="size-4" />
+                </Link>
+                <Link
+                  href="https://github.com/aashir-athar/mindeesai"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="btn btn-ghost"
+                >
+                  <GithubIcon className="size-4" />
+                  {hero.ctaSecondary}
+                </Link>
+              </div>
+            </div>
+
+            <aside className="col-span-12 md:col-span-3 md:pt-2 reveal reveal-delay-3">
+              <p className="text-eyebrow mb-4">VITALS</p>
+              <ul className="flex flex-col gap-3 text-sm text-bone-300">
+                <Vital label="MIT" value="Open-source" />
+                <Vital label="0¢" value="Free to host" />
+                <Vital label="5 min" value="Self-improvement tick" />
+                <Vital label="8d" value="Mood tensor" />
+                <Vital label="16d" value="User model" />
+                <Vital label="42×" value="Built-in skills + tensors" />
+              </ul>
+            </aside>
           </div>
-          <Link
-            href="/chat"
-            className="text-sm px-4 py-2 rounded-full glass hover:bg-white/[0.05] transition-colors inline-flex items-center gap-1.5"
-          >
-            Open chat <ArrowUpRight className="size-3.5" />
-          </Link>
-        </nav>
-      </header>
 
-      {/* HERO */}
-      <section className="relative pt-40 md:pt-52 pb-24 md:pb-32 mx-auto max-w-7xl px-6 md:px-10">
-        <div className="absolute inset-0 -z-10 pointer-events-none">
-          <HeroOrb />
-        </div>
-
-        <p className="text-eyebrow reveal-up">{headlines.trustBar}</p>
-
-        <h1 className="text-display text-5xl md:text-7xl lg:text-[5.5rem] mt-6 max-w-5xl reveal-up" style={{ animationDelay: "60ms" }}>
-          An AI that <em className="aurora-grad not-italic">gets smarter</em>{" "}
-          every five minutes —{" "}
-          and remembers <em className="font-display italic text-bone-300">you</em> forever.
-        </h1>
-
-        <p className="mt-8 max-w-2xl text-lg md:text-xl text-bone-300 leading-relaxed reveal-up" style={{ animationDelay: "120ms" }}>
-          MindeesAI ships its own transformer architecture, its own tokenizer, and its own weights — and runs
-          gradient descent on those weights every five minutes, on its own conversations. No vendor. No
-          subscription. No forgetting.
-        </p>
-
-        <div className="mt-12 flex flex-wrap items-center gap-4 reveal-up" style={{ animationDelay: "180ms" }}>
-          <Link
-            href="/chat"
-            className="group inline-flex items-center gap-2 px-6 py-3.5 rounded-full bg-bone-50 text-ink-950 font-medium hover:bg-white transition-colors"
-          >
-            <Sparkles className="size-4" />
-            Start a conversation
-            <ArrowUpRight className="size-4 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
-          </Link>
-          <Link
-            href="https://github.com/aashir-athar/mindeesai"
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex items-center gap-2 px-6 py-3.5 rounded-full glass hover:bg-white/[0.05] transition-colors"
-          >
-            <GithubIcon className="size-4" />
-            Star on GitHub
-          </Link>
-        </div>
-
-        {/* Live status under hero */}
-        <div className="mt-16 reveal-up" style={{ animationDelay: "240ms" }}>
-          <LiveStatus />
+          <div className="mt-20 reveal reveal-delay-4">
+            <DossierStrip />
+          </div>
         </div>
       </section>
 
-      {/* HOW IT WORKS */}
-      <section id="how" className="relative py-32 mx-auto max-w-7xl px-6 md:px-10">
-        <p className="text-eyebrow">How it works</p>
-        <h2 className="text-display text-4xl md:text-6xl mt-4 max-w-4xl">
-          The model trains itself. <span className="text-bone-500">In four moves.</span>
-        </h2>
+      <div className="rule-fade mx-auto max-w-6xl" />
 
-        <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6 mt-16">
-          {[
-            { n: "01", t: "Talk", d: "Every conversation is appended to JSONL and embedded into the long-term vector store." },
-            { n: "02", t: "Reflect", d: "Every 5 minutes the model reads its recent threads and distils high-confidence insights." },
-            { n: "03", t: "Train", d: "AdamW + LoRA gradient step on the model's own weights — the actual neural network changes." },
-            { n: "04", t: "Improve", d: "The next message you send hits an objectively smarter model. Loss curves recorded in the log." },
-          ].map((s, i) => (
-            <article
-              key={s.n}
-              className="glass rounded-2xl p-6 reveal-up"
-              style={{ animationDelay: `${100 + i * 80}ms` }}
-            >
-              <p className="font-mono text-xs text-aurora-400">{s.n}</p>
-              <h3 className="text-display text-2xl mt-4">{s.t}</h3>
-              <p className="text-bone-300 mt-3 text-[15px] leading-relaxed">{s.d}</p>
+      {/* ───────────── 01 / MECHANISM ───────────── */}
+      <section id="how" className="section">
+        <SectionHeading
+          index={sections.how.index}
+          kicker={sections.how.kicker}
+          title={sections.how.title}
+          lede={sections.how.lede}
+        />
+
+        <div className="mt-16 grid md:grid-cols-2 gap-x-12 gap-y-14">
+          {sections.how.steps.map((s) => (
+            <article key={s.n} className="flex gap-8">
+              <p className="text-display text-5xl md:text-6xl text-bone-50 leading-none w-16 shrink-0">
+                {s.n}
+              </p>
+              <div className="flex flex-col gap-3 pt-2">
+                <h3 className="text-display text-2xl md:text-3xl">{s.t}</h3>
+                <p className="text-bone-300 leading-relaxed text-[15px]">{s.d}</p>
+              </div>
             </article>
           ))}
         </div>
       </section>
 
-      {/* FEATURES (horizontal scroll canvas) */}
-      <section id="features" className="relative py-32">
-        <div className="mx-auto max-w-7xl px-6 md:px-10">
-          <p className="text-eyebrow">What it does</p>
-          <h2 className="text-display text-4xl md:text-6xl mt-4 max-w-4xl">
-            Native everything. <span className="text-bone-500">Including the brain.</span>
-          </h2>
-        </div>
-        <FeatureCanvas />
-      </section>
+      <div className="rule-fade mx-auto max-w-6xl" />
 
-      {/* PHILOSOPHY */}
-      <section id="philosophy" className="relative py-32 mx-auto max-w-4xl px-6 md:px-10">
-        <p className="text-eyebrow">Philosophy</p>
-        <h2 className="text-display text-3xl md:text-5xl mt-4">
-          Trust is built by <em className="aurora-grad not-italic">showing your work</em>.
-        </h2>
-        <div className="mt-12 space-y-7 text-lg text-bone-300 leading-[1.7]">
-          <p>{lossAversion.forgetting}</p>
-          <p>{authority.citationsAreFirstClass}</p>
-          <p>{authority.reflectionLog}</p>
-          <p>{reciprocity.freeTier}</p>
-          <p className="text-bone-500 italic">{specificity.cadence}</p>
+      {/* ───────────── 02 / SPECS ───────────── */}
+      <section id="specs" className="section">
+        <div className="grid-editorial">
+          <div>
+            <SectionHeading
+              index={sections.specs.index}
+              kicker={sections.specs.kicker}
+              title={sections.specs.title}
+              lede={sections.specs.lede}
+            />
+          </div>
+          <div>
+            <SpecsTable rows={SPEC_ROWS} />
+          </div>
         </div>
       </section>
 
-      {/* CTA */}
-      <section className="relative py-32 mx-auto max-w-7xl px-6 md:px-10">
+      <div className="rule-fade mx-auto max-w-6xl" />
+
+      {/* ───────────── 03 / FEATURES ───────────── */}
+      <section id="features" className="section">
+        <SectionHeading
+          index={sections.features.index}
+          kicker={sections.features.kicker}
+          title={sections.features.title}
+          lede={sections.features.lede}
+        />
+        <div className="-mx-[clamp(1.5rem,5vw,3rem)]">
+          <FeatureCanvas />
+        </div>
+      </section>
+
+      <div className="rule-fade mx-auto max-w-6xl" />
+
+      {/* ───────────── 04 / PHILOSOPHY ───────────── */}
+      <section id="philosophy" className="section">
+        <div className="grid-editorial">
+          <div>
+            <p className="text-eyebrow">{sections.philosophy.index} / {sections.philosophy.kicker}</p>
+            <h2 className="text-display-md mt-4">{sections.philosophy.title}</h2>
+          </div>
+          <div className="pt-2">
+            <PullQuote attribution={philosophyQuote.attribution}>
+              {philosophyQuote.body}
+            </PullQuote>
+          </div>
+        </div>
+      </section>
+
+      <div className="rule-fade mx-auto max-w-6xl" />
+
+      {/* ───────────── 05 / START ───────────── */}
+      <section id="start" className="section">
         <div className="glass-strong rounded-3xl p-10 md:p-16 relative overflow-hidden">
-          <div className="absolute -top-32 -right-32 size-96 rounded-full bg-aurora-500/20 blur-3xl pointer-events-none" aria-hidden />
-          <p className="text-eyebrow relative">Ship it</p>
-          <h2 className="text-display text-3xl md:text-5xl mt-4 max-w-2xl relative">
-            One repo. One clone. One model that <em className="not-italic aurora-grad">never stops learning</em>.
-          </h2>
-          <div className="mt-10 flex flex-wrap gap-4 relative">
+          <div className="absolute -top-32 -right-32 size-96 rounded-full bg-warm-400/10 blur-3xl pointer-events-none" aria-hidden />
+          <p className="text-eyebrow relative">{sections.start.index} / {sections.start.kicker}</p>
+          <h2 className="text-display-md mt-4 max-w-3xl relative">{sections.start.title}</h2>
+          <p className="text-bone-300 leading-relaxed mt-6 max-w-xl relative">{sections.start.lede}</p>
+          <div className="mt-10 flex flex-wrap gap-3 relative">
             <Link
               href="https://github.com/aashir-athar/mindeesai"
               target="_blank"
               rel="noreferrer"
-              className="inline-flex items-center gap-2 px-6 py-3.5 rounded-full bg-bone-50 text-ink-950 font-medium hover:bg-white transition-colors"
+              className="btn btn-primary"
             >
               <GithubIcon className="size-4" />
-              Clone the repo
+              Clone the repository
               <ArrowUpRight className="size-4" />
             </Link>
-            <Link
-              href="/chat"
-              className="inline-flex items-center gap-2 px-6 py-3.5 rounded-full glass hover:bg-white/[0.05] transition-colors"
-            >
-              Try it first
+            <Link href="/chat" className="btn btn-ghost">
+              Talk to Mindees first
             </Link>
           </div>
         </div>
       </section>
 
-      {/* FOOTER */}
-      <footer className="relative border-t border-white/[0.06] mt-20">
-        <div className="mx-auto max-w-7xl px-6 md:px-10 py-12 flex flex-wrap items-center justify-between gap-4">
-          <p className="text-sm text-bone-500">
-            Built by{" "}
-            <a href="https://github.com/aashir-athar" className="text-bone-300 hover:text-bone-100" target="_blank" rel="noreferrer">
-              Aashir Athar
-            </a>{" "}
-            · MIT License · 100% open-source
-          </p>
-          <p className="text-xs font-mono text-bone-500">v0.1.0</p>
-        </div>
-      </footer>
+      <SiteFooter />
     </main>
   );
 }
+
+function Vital({ label, value }: { label: string; value: string }) {
+  return (
+    <li className="grid grid-cols-12 items-baseline gap-3 py-2 border-t border-white/[0.05] first:border-t-0">
+      <span className="col-span-4 text-tabular text-warm-400 text-base">{label}</span>
+      <span className="col-span-8 text-bone-200">{value}</span>
+    </li>
+  );
+}
+
+/** Honest, auditable architecture spec sheet. Each row maps to source code. */
+const SPEC_ROWS = [
+  { label: "MODEL CLASS",     value: "Decoder-only transformer",  detail: "RoPE · RMSNorm · SwiGLU · GQA · tied embeddings" },
+  { label: "VARIANTS",        value: "nano · small · base · large · moe-small · moe-base", detail: "12M → 1.3B params" },
+  { label: "SPARSITY",        value: "Mixture of Experts, top-K", detail: "8 / 16 experts, top-2 routing, load-balance aux loss" },
+  { label: "ATTENTION",       value: "Multi-head Latent Attention", detail: "DeepSeek-V3 compressed-KV, ~10× cache reduction" },
+  { label: "AUX HEADS",       value: "Multi-Token Prediction",    detail: "Depth 2–3 — denser training signal, speculative drafts" },
+  { label: "ONLINE TRAINING", value: "AdamW + LoRA",              detail: "Every 5 min via /api/cron/self-improve" },
+  { label: "RL",              value: "GRPO",                      detail: "Group Relative Policy Optimization — no reward model" },
+  { label: "ALIGNMENT",       value: "Constitutional self-critique", detail: "Critic-gated refinement loop" },
+  { label: "PERSONA TENSORS", value: "Mood 8d · User 16d · Relationship 4d", detail: "Drift detector + curiosity gap + reward predictor" },
+  { label: "MEMORY",          value: "LanceDB · JSONL · Graph",   detail: "Vector recall + replay buffer + entity graph" },
+  { label: "RESEARCH",        value: "Tavily / Exa · Firecrawl / Jina", detail: "Free-tier autonomous search + extraction" },
+  { label: "CONNECTORS",      value: "Drop-folder plugins",       detail: "6 built-in: web-search, web-crawl, calculator, code-exec, file-read, reflect" },
+  { label: "EVAL",            value: "Perplexity · Reasoning · Recall", detail: "Regression-gated rollback after every cron tick" },
+  { label: "RUNTIME",         value: "TypeScript · WebGPU",       detail: "Pure-JS CPU fallback; Python pretraining in scripts/train/" },
+  { label: "DEPLOY",          value: "Vercel · self-host · air-gapped", detail: "MIT-licensed, MIT-everything" },
+];

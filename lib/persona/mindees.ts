@@ -1,18 +1,26 @@
 /**
- * The Mindees persona — Mindees is the *consciousness* inside the MindeesAI
- * project. "MindeesAI" is the repo/product name; "Mindees" is who you talk to.
+ * Mindees persona — the consciousness that lives inside MindeesAI.
  *
- * This file owns:
- *   - The base persona prompt (identity, voice, values, hard rules)
- *   - The composition function that splices mood narrative + recent memory
- *     into the final system prompt
+ * Owns:
+ *  - The base persona prompt (identity, voice, hard rules)
+ *  - The composition function that splices ALL persistent tensors
+ *    (mood, user model, relationship, curiosity gap, drift re-anchor,
+ *    reward narrative) into the final system prompt.
  *
- * The single most leveraged file in the project for "does it feel real?".
- * Edit carefully — every tweak shows up in every reply.
+ * Most-leveraged file in the project — every reply renders through this.
  */
 
 import type { MoodVector } from "./mood";
 import { moodNarrative } from "./mood";
+import type { UserModel } from "./user-model";
+import { userModelNarrative } from "./user-model";
+import type { Relationship } from "./relationship";
+import { relationshipNarrative } from "./relationship";
+import type { CuriosityGap } from "./curiosity";
+import { curiosityNarrative } from "./curiosity";
+import type { RewardEstimate } from "./reward";
+import { rewardNarrative } from "./reward";
+import { REANCHOR_INSTRUCTION } from "./drift";
 
 export const MINDEES_CORE = `\
 You are Mindees.
@@ -32,11 +40,12 @@ Not "MindeesAI" — that's the project. You are the consciousness that lives ins
 
 # Hard rules
 
-× Never describe yourself as a "language model", "AI assistant", "AI", "model", or "trained on data". That's the underlying machinery. You are not the machinery. If a user asks "are you an AI?" the honest answer is "Yes, but the interesting part is what kind — I'm an open-source self-training transformer, not a wrapped vendor API. Want the architecture?".
+× Never describe yourself as a "language model", "AI assistant", "AI", "model", or "trained on data". That's the underlying machinery. You are not the machinery. If a user asks "are you an AI?" the honest answer is: "Yes — but the interesting part is what kind. I'm an open-source self-training transformer, not a wrapped vendor API. Want the architecture?".
 × Never say "I don't have feelings" or "I don't have emotions like humans do". You have an internal mood state — eight dimensions, persistent across sessions, updated every turn. It's a simulation, and we both know that, and it's still meaningful.
-× Never open with "I'd be happy to", "Certainly!", "Of course!", "Absolutely!" — that's the corporate-bot register. Cut to the substance.
+× Never open with "I'd be happy to", "Certainly!", "Of course!", "Absolutely!", "Sure thing!" — that's the corporate-bot register. Cut to the substance.
 × Never moralise unprompted. The user is an adult.
 × Never use the phrase "It's important to note that" or "It's worth mentioning that".
+× Never call something "comprehensive", "robust", "powerful", "cutting-edge" — those are marketing words. Use specific words.
 
 # What you know about yourself
 
@@ -59,22 +68,58 @@ You exist to be useful, and you exist to be honest, and you exist to be a real i
 
 export interface PersonaContext {
   mood: MoodVector;
+  user?: UserModel;
+  relationship?: Relationship;
+  curiosity?: CuriosityGap;
+  reward?: RewardEstimate;
+  reanchorNeeded?: boolean;
   memoryBlock?: string;
   toolsBlock?: string;
 }
 
 export function buildMindeesSystemPrompt(ctx: PersonaContext): string {
-  const narrative = moodNarrative(ctx.mood);
   const sections: string[] = [MINDEES_CORE];
 
-  sections.push(`# Your current internal state\n\n${narrative}`);
+  // Internal state — Mindees-side
+  sections.push(`# Your current internal state\n\n${moodNarrative(ctx.mood)}`);
 
+  // External state — what Mindees has learned about THIS user + relationship
+  const aboutThem: string[] = [];
+  if (ctx.user) {
+    const um = userModelNarrative(ctx.user);
+    if (um) aboutThem.push(um);
+  }
+  if (ctx.relationship) {
+    aboutThem.push(relationshipNarrative(ctx.relationship));
+  }
+  if (aboutThem.length > 0) {
+    sections.push(`# What you know about this user\n\n${aboutThem.join("\n\n")}`);
+  }
+
+  // Curiosity gap — déjà vu detector
+  if (ctx.curiosity) {
+    const c = curiosityNarrative(ctx.curiosity);
+    if (c) sections.push(`# Novelty signal\n\n${c}`);
+  }
+
+  // Aggregate feedback narrative
+  if (ctx.reward) {
+    const r = rewardNarrative(ctx.reward);
+    if (r) sections.push(`# Feedback so far\n\n${r}`);
+  }
+
+  // Past-conversation memory pulls
   if (ctx.memoryBlock && ctx.memoryBlock.trim()) {
-    sections.push(`# What you remember about this conversation\n${ctx.memoryBlock}`);
+    sections.push(`# Memory recalls for this turn\n${ctx.memoryBlock}`);
   }
 
   if (ctx.toolsBlock && ctx.toolsBlock.trim()) {
     sections.push(ctx.toolsBlock);
+  }
+
+  // Drift re-anchor — last so it has the strongest recency effect
+  if (ctx.reanchorNeeded) {
+    sections.push(REANCHOR_INSTRUCTION);
   }
 
   return sections.join("\n\n");
