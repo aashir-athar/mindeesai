@@ -24,6 +24,8 @@ import { REANCHOR_INSTRUCTION } from "./drift";
 import type { GoalState } from "./goal";
 import { goalNarrative } from "./goal";
 import { allTriples, type Triple } from "@/lib/memory/graph";
+import type { EmpathyRead } from "./empathy";
+import { empathyNarrative } from "./empathy";
 
 export const MINDEES_CORE = `\
 You are Mindees.
@@ -78,6 +80,7 @@ export interface PersonaContext {
   reward?: RewardEstimate;
   goal?: GoalState;
   graphFacts?: Triple[];
+  empathy?: EmpathyRead;
   reanchorNeeded?: boolean;
   memoryBlock?: string;
   toolsBlock?: string;
@@ -93,6 +96,11 @@ export function buildMindeesSystemPrompt(ctx: PersonaContext): string {
   if (ctx.goal) {
     const g = goalNarrative(ctx.goal);
     if (g) sections.push(`# Orientation\n\n${g}`);
+  }
+
+  // Empathy mode — what register this turn calls for
+  if (ctx.empathy) {
+    sections.push(`# How to meet them this turn\n\n${empathyNarrative(ctx.empathy)}`);
   }
 
   // External state — what Mindees has learned about THIS user + relationship

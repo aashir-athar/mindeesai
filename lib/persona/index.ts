@@ -51,3 +51,9 @@ export {
   type GoalState,
 } from "./goal";
 export { extractAndPersistTriples } from "./extract-triples";
+
+// v0.2.4 — empathy state (what the user needs Mindees to BE this turn)
+export { readEmpathy, empathyNarrative, type EmpathyMode, type EmpathyRead } from "./empathy";
+
+// v0.2.4 — auto-research (proactive learning between turns)
+export { decideAutoResearch, performAutoResearch, type AutoResearchDecision } from "./auto-research";

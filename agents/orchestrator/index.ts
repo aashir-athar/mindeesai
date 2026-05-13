@@ -40,6 +40,9 @@ import {
   getGoal,
   updateGoal,
   extractAndPersistTriples,
+  readEmpathy,
+  decideAutoResearch,
+  performAutoResearch,
 } from "@/lib/persona";
 import { neighbours } from "@/lib/memory/graph";
 import { isoNow, nid } from "@/lib/utils";
@@ -77,8 +80,9 @@ export async function* orchestrate(opts: {
   };
   await appendMessage(threadId, userTurn);
 
-  // 2. Read affect → update all per-turn tensors in parallel
+  // 2. Read affect + empathy → update all per-turn tensors in parallel
   const affect = readAffect(userMessage);
+  const empathy = readEmpathy(userMessage, affect);
   const [mood, userModelPrev, relPrev, goal] = await Promise.all([
     updateMood(affect),
     getUserModel(threadId),
@@ -169,6 +173,7 @@ export async function* orchestrate(opts: {
     reward,
     goal,
     graphFacts,
+    empathy,
     reanchorNeeded,
     memoryBlock,
     toolsBlock,
@@ -302,6 +307,25 @@ export async function* orchestrate(opts: {
     userMessage,
     assistantReply: finalAssistant.content,
   }).catch((e) => log.warn("kg extract failed", e));
+
+  // AUTO-RESEARCH: if Mindees hedged or the question was high-novelty AND
+  // web-search didn't already fire, kick off a background research call so
+  // the next time the user asks about this area Mindees has the answer
+  // stored as recallable memories. This is the visible self-machine-learning
+  // loop at the chat-tick scale.
+  const usedWebSearch = citations.some((c) => c.source === "web");
+  const autoResearchDecision = decideAutoResearch({
+    userMessage,
+    assistantReply: finalAssistant.content,
+    curiosityNovelty: curiosity.novelty,
+    alreadyUsedWebSearch: usedWebSearch,
+  });
+  if (autoResearchDecision.shouldResearch) {
+    void performAutoResearch({
+      topic: autoResearchDecision.topic,
+      signal,
+    }).catch((e) => log.warn("auto-research failed", e));
+  }
 
   // Thread metadata: titled on first turn, lastActivity bumped every turn
   const priorMeta = await getMeta(threadId);
