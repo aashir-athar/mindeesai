@@ -101,13 +101,31 @@ export async function* orchestrate(opts: {
   yield { type: "mood", mood: { values: mood.values, steps: mood.steps, lastRegister: mood.lastRegister } };
   yield { type: "stage", stage: "context" };
 
-  // 3. Retrieve memories + insights + curiosity gap from those scores
-  const [memoryHits, insightHits] = await Promise.all([
+  // 3. Retrieve memories. Pull BOTH this thread's memories AND cross-thread
+  //    memories so Mindees can say "you mentioned this in another
+  //    conversation last week". Insights are always cross-thread.
+  const [inThread, crossThread, insightHits] = await Promise.all([
     recall(userMessage, 6, threadId).catch(() => [] as RetrievalHit[]),
+    recall(userMessage, 5).catch(() => [] as RetrievalHit[]),
     recallInsights(userMessage, 4).catch(() => [] as RetrievalHit[]),
   ]);
+  const seen = new Set(inThread.map((h) => h.id));
+  const fromOtherThreads = crossThread.filter(
+    (h) => !seen.has(h.id) && h.threadId !== threadId && h.score >= 0.60,
+  );
+  const memoryHits: RetrievalHit[] = [...inThread, ...fromOtherThreads].slice(0, 8);
   const memoryBlock = formatMemoryBlock(memoryHits, insightHits);
   const curiosity = curiosityGap(memoryHits);
+
+  // Self-organization: track which memories keep proving themselves. Memories
+  // recalled 3+ times at high confidence get auto-promoted to the insights
+  // table (stronger retrieval weight). Fire-and-forget — no UX impact.
+  void (async () => {
+    try {
+      const { trackRecalls } = await import("@/lib/memory/promotion");
+      await trackRecalls([...memoryHits, ...insightHits]);
+    } catch (e) { log.warn("recall promotion failed", e); }
+  })();
 
   // 4. Aggregate reward signal from historical thumbs (cached)
   const reward = await predictReward();
@@ -376,8 +394,16 @@ function formatMemoryBlock(
     for (const i of insightHits.slice(0, 4)) lines.push(`- ${i.text}`);
   }
   if (memoryHits.length > 0) {
-    lines.push("\n## Relevant memories");
-    for (const m of memoryHits.slice(0, 5)) lines.push(`- ${m.text}`);
+    const cross = memoryHits.filter((m) => m.threadId);
+    const same = memoryHits.filter((m) => !m.threadId);
+    if (cross.length > 0) {
+      lines.push("\n## Memories from earlier conversations with this user");
+      for (const m of cross.slice(0, 4)) lines.push(`- ${m.text}`);
+    }
+    if (same.length > 0) {
+      lines.push("\n## Memories from this conversation");
+      for (const m of same.slice(0, 5)) lines.push(`- ${m.text}`);
+    }
   }
   return lines.join("\n");
 }
