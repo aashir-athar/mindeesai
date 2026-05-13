@@ -1,18 +1,31 @@
 /**
  * The Orchestrator — MindeesAI's "main loop".
  *
- * v0.2 upgrades:
- *   - Reasoning mode: hard questions get a hidden `<think>` block before the answer.
- *     Streamed to the UI as `reasoning` events so users can opt into seeing the
- *     model's chain of thought.
- *   - All generation flows through the native model via `mindees.*`.
- *   - Tool-call protocol unchanged.
+ * Inference path (v0.2.1):
+ *   - **Today:** delegates to `lib/llm/router.streamLLM`, which routes to the
+ *     first configured cloud provider (Anthropic → xAI → OpenAI → Groq →
+ *     Google) or falls back to a reachable Ollama instance.
+ *   - **Future:** when `checkpoints/base.bin` exists (pretrained native model),
+ *     a flag will flip the orchestrator to use `mindees.generateTextStream`.
+ *     The native model's *training* pipeline is already running every 5 minutes
+ *     and ingesting these conversations — see [[self-improvement-loop]].
+ *
+ * Why the LLM router today?
+ *   The native model's weights are randomly initialised. Without pretraining
+ *   it can't produce coherent text. Until a checkpoint is minted, the LLM
+ *   router IS the working inference engine. This is the standard bootstrap
+ *   pattern for self-training systems.
+ *
+ * Tool-calling:
+ *   We use the providers' native function-calling protocol (OpenAI-compatible
+ *   `tool_calls`), surfaced by the router as `{ type: "tool-call", toolCall }`
+ *   chunks. The orchestrator runs the connector, appends a tool-result
+ *   message to the history, and loops the LLM with the updated history.
  */
 
-import { generateTextStream, generateWithReasoning } from "@/core/mindees-mind";
-import { estimateDifficulty } from "@/core/mindees-mind/inference/reasoning";
+import { streamLLM } from "@/lib/llm/router";
 import { getActiveSystemPrompt } from "@/lib/prompts";
-import { getRegistry, runConnector } from "@/lib/connectors/loader";
+import { getRegistry, runConnector, listTools } from "@/lib/connectors/loader";
 import { buildContext } from "@/lib/connectors/context";
 import {
   appendMessage,
@@ -26,9 +39,6 @@ import type { Citation, Message, ToolCall } from "@/lib/types";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("orchestrator");
-
-const TOOL_OPEN = "<tool>";
-const TOOL_CLOSE = "</tool>";
 const MAX_TOOL_HOPS = 5;
 
 export type OrchestratorEvent =
@@ -45,10 +55,12 @@ export async function* orchestrate(opts: {
   userMessage: string;
   signal: AbortSignal;
   user?: { id: string };
-  reasoning?: "auto" | "off" | "always";
+  /** Override the LLM model (e.g., "anthropic:claude-opus-4-7", "groq:llama-3.3-70b-versatile"). */
+  modelId?: string;
 }): AsyncIterable<OrchestratorEvent> {
-  const { threadId, userMessage, signal, user, reasoning = "auto" } = opts;
+  const { threadId, userMessage, signal, user, modelId } = opts;
 
+  // 1. Append user turn to thread + memory
   const userTurn: Message = {
     id: nid(),
     role: "user",
@@ -59,6 +71,7 @@ export async function* orchestrate(opts: {
 
   yield { type: "stage", stage: "context" };
 
+  // 2. Assemble context in parallel
   const thread = await readThread(threadId);
   const [memoryHits, insightHits] = await Promise.all([
     recall(userMessage, 6, threadId).catch(() => []),
@@ -66,141 +79,121 @@ export async function* orchestrate(opts: {
   ]);
   const memoryBlock = formatMemoryBlock(memoryHits, insightHits);
 
+  // 3. System prompt + tool descriptors
   const basePrompt = await getActiveSystemPrompt();
   const registry = await getRegistry();
-  const toolsList = [...registry.values()].map((c) => `- \`${c.manifest.name}\` — ${c.manifest.description}`).join("\n");
-  const toolGuidance = [...registry.values()].filter((c) => c.prompt).map((c) => `### ${c.manifest.name}\n${c.prompt}`).join("\n\n");
+  const toolGuidance = [...registry.values()]
+    .filter((c) => c.prompt)
+    .map((c) => `### ${c.manifest.name}\n${c.prompt}`)
+    .join("\n\n");
+  const systemPrompt = [basePrompt, memoryBlock, toolGuidance ? `\n## Tool-specific guidance\n${toolGuidance}` : ""]
+    .filter(Boolean)
+    .join("\n");
 
-  const systemPrompt = [
-    basePrompt,
-    memoryBlock,
-    "",
-    "## Available tools",
-    "Invoke a tool by emitting EXACTLY this JSON block on its own line(s):",
-    `${TOOL_OPEN}{"name":"<name>","args":{...}}${TOOL_CLOSE}`,
-    "After the block, stop generating. The orchestrator runs the tool and feeds the result back as `<tool-result>{...}</tool-result>`. Then continue.",
-    "",
-    toolsList,
-    toolGuidance ? `\n## Tool-specific guidance\n${toolGuidance}` : "",
-  ].join("\n");
+  const tools = await listTools();
 
-  const chatPrompt = formatChatPrompt(systemPrompt, thread, userTurn);
+  // 4. Conversation history — last 12 turns, excluding the current user turn
+  //    (it's appended last so the model knows what to answer)
+  const history: Message[] = [...thread, userTurn].slice(-13);
 
-  const decided =
-    reasoning === "off" ? null :
-    reasoning === "always" ? "deep" as const :
-    estimateDifficulty(userMessage);
-
+  // 5. Tool-call loop
   let aggregatedText = "";
-  let reasoningText = "";
   const citations: Citation[] = [];
-
-  // Reasoning pass for hard problems
-  if (decided && decided !== "shallow") {
-    yield { type: "stage", stage: "reasoning" };
-    const reasoned = await generateWithReasoning(chatPrompt, {
-      depth: decided,
-      signal,
-    });
-    reasoningText = reasoned.thinking;
-    if (reasoningText) yield { type: "reasoning", text: reasoningText };
-    if (reasoned.answer) {
-      aggregatedText = reasoned.answer;
-      yield { type: "text", text: reasoned.answer };
-    }
-  }
-
-  // Tool-call loop
-  let runningPrompt = aggregatedText ? `${chatPrompt}${aggregatedText}` : chatPrompt;
+  let conversation: Message[] = history;
 
   for (let hop = 0; hop < MAX_TOOL_HOPS; hop++) {
-    yield { type: "stage", stage: hop === 0 && !reasoningText ? "thinking" : "synthesising", detail: hop > 0 ? `hop ${hop}` : undefined };
+    yield { type: "stage", stage: hop === 0 ? "thinking" : "synthesising", detail: hop > 0 ? `hop ${hop}` : undefined };
 
-    let hopBuf = "";
-    let toolFound: { call: ToolCall; before: string } | null = null;
+    let hopText = "";
+    let hopReasoning = "";
+    const pendingTools: ToolCall[] = [];
 
-    for await (const piece of generateTextStream(runningPrompt, {
-      maxTokens: 768,
-      temperature: 0.4,
-      stop: [TOOL_CLOSE, "<|endoftext|>"],
+    for await (const chunk of streamLLM({
+      modelId,
+      messages: conversation,
+      system: systemPrompt,
+      tools,
       signal,
+      thinking: true,
     })) {
       if (signal.aborted) break;
-      hopBuf += piece;
+      if (chunk.type === "text" && chunk.text) {
+        hopText += chunk.text;
+        aggregatedText += chunk.text;
+        yield { type: "text", text: chunk.text };
+      } else if (chunk.type === "thinking" && chunk.text) {
+        hopReasoning += chunk.text;
+      } else if (chunk.type === "tool-call" && chunk.toolCall) {
+        pendingTools.push(chunk.toolCall);
+      } else if (chunk.type === "finish") {
+        break;
+      }
+    }
 
-      const open = hopBuf.indexOf(TOOL_OPEN);
-      const close = hopBuf.indexOf(TOOL_CLOSE);
-      if (open >= 0 && close > open) {
-        const before = hopBuf.slice(0, open);
-        const inner = hopBuf.slice(open + TOOL_OPEN.length, close);
-        try {
-          const parsed = JSON.parse(inner) as { name: string; args: unknown };
-          toolFound = { call: { id: nid(), name: parsed.name, args: parsed.args }, before };
-          aggregatedText += before;
-          if (before) yield { type: "text", text: before };
-          break;
-        } catch (e) {
-          log.warn("malformed tool call", e);
-          aggregatedText += hopBuf;
-          yield { type: "text", text: hopBuf };
-          hopBuf = "";
-          continue;
-        }
+    if (hopReasoning) {
+      yield { type: "reasoning", text: hopReasoning };
+    }
+
+    if (pendingTools.length === 0) break;
+
+    // Record the assistant turn that issued the tool calls
+    const assistantToolTurn: Message = {
+      id: nid(),
+      role: "assistant",
+      content: hopText,
+      toolCalls: pendingTools,
+      createdAt: isoNow(),
+    };
+    conversation = [...conversation, assistantToolTurn];
+
+    // Run each tool sequentially (parallel is possible but tool ordering matters for citations)
+    for (const tc of pendingTools) {
+      const start = performance.now();
+      yield { type: "tool-start", name: tc.name, args: tc.args, callId: tc.id };
+
+      const entry = registry.get(tc.name);
+      let result: Awaited<ReturnType<typeof runConnector>>;
+      if (!entry) {
+        result = { ok: false, error: `unknown tool ${tc.name}` };
       } else {
-        const lastLT = hopBuf.lastIndexOf("<");
-        const safeCut = lastLT < 0 ? hopBuf.length : lastLT;
-        if (safeCut > 0) {
-          const flushed = hopBuf.slice(0, safeCut);
-          aggregatedText += flushed;
-          yield { type: "text", text: flushed };
-          hopBuf = hopBuf.slice(safeCut);
+        const ctx = buildContext(entry.manifest, signal, user);
+        result = await runConnector(tc.name, tc.args, ctx);
+      }
+      const ms = performance.now() - start;
+      yield { type: "tool-end", name: tc.name, callId: tc.id, ok: result.ok, ms };
+
+      if (result.ok && result.citations) {
+        for (const c of result.citations) {
+          citations.push(c);
+          yield { type: "citation", citation: c };
         }
       }
-    }
 
-    if (!toolFound) {
-      if (hopBuf) {
-        aggregatedText += hopBuf;
-        yield { type: "text", text: hopBuf };
-      }
-      break;
-    }
+      const content = result.ok
+        ? typeof result.output === "string" ? result.output : JSON.stringify(result.output)
+        : `Error: ${result.error}`;
 
-    const tc = toolFound.call;
-    const start = performance.now();
-    yield { type: "tool-start", name: tc.name, args: tc.args, callId: tc.id };
-    const entry = registry.get(tc.name);
-    let result: Awaited<ReturnType<typeof runConnector>>;
-    if (!entry) {
-      result = { ok: false, error: `unknown tool ${tc.name}` };
-    } else {
-      const ctx = buildContext(entry.manifest, signal, user);
-      result = await runConnector(tc.name, tc.args, ctx);
+      conversation = [
+        ...conversation,
+        {
+          id: nid(),
+          role: "tool",
+          content,
+          toolCallId: tc.id,
+          createdAt: isoNow(),
+        },
+      ];
     }
-    const ms = performance.now() - start;
-    yield { type: "tool-end", name: tc.name, callId: tc.id, ok: result.ok, ms };
-
-    if (result.ok && result.citations) {
-      for (const c of result.citations) {
-        citations.push(c);
-        yield { type: "citation", citation: c };
-      }
-    }
-
-    const resultText = result.ok
-      ? typeof result.output === "string" ? result.output : JSON.stringify(result.output)
-      : `Error: ${result.error}`;
-    runningPrompt += `\n${TOOL_OPEN}${JSON.stringify({ name: tc.name, args: tc.args })}${TOOL_CLOSE}\n<tool-result>${resultText}</tool-result>\n`;
   }
 
+  // 6. Final assistant turn
   const finalAssistant: Message = {
     id: nid(),
     role: "assistant",
     content: aggregatedText.trim(),
     citations,
-    thinkingTokens: reasoningText ? reasoningText.length : undefined,
     createdAt: isoNow(),
-    modelId: "mindees-native",
+    modelId: modelId ?? "router-auto",
   };
   await appendMessage(threadId, finalAssistant);
 
@@ -228,16 +221,4 @@ function formatMemoryBlock(
     for (const m of memoryHits.slice(0, 5)) lines.push(`- ${m.text}`);
   }
   return lines.join("\n");
-}
-
-function formatChatPrompt(system: string, history: Message[], current: Message): string {
-  const parts: string[] = [`<system>${system}</system>`];
-  for (const m of history.slice(-12)) {
-    if (m.role === "user") parts.push(`<user>${m.content}</user>`);
-    else if (m.role === "assistant") parts.push(`<assistant>${m.content}</assistant>`);
-    else if (m.role === "tool") parts.push(`<tool-result>${m.content}</tool-result>`);
-  }
-  parts.push(`<user>${current.content}</user>`);
-  parts.push(`<assistant>`);
-  return parts.join("\n");
 }

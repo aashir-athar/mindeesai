@@ -20,7 +20,7 @@
 
 import { env } from "@/lib/env";
 import type { LLMProvider, LLMRequest, LLMStreamChunk, ProviderId } from "@/lib/types";
-import { ollamaProvider } from "./providers/ollama";
+import { ollamaProvider, probeOllama } from "./providers/ollama";
 import { anthropicProvider } from "./providers/anthropic";
 import { openaiProvider } from "./providers/openai";
 import { xaiProvider } from "./providers/xai";
@@ -63,18 +63,22 @@ export async function pickProvider(req: LLMRequest): Promise<{ provider: LLMProv
     return { provider: PROVIDERS[explicit], modelId: bareModelId(req.modelId) ?? env.DEFAULT_CHAT_MODEL };
   }
 
-  // (2) Ollama if reachable
-  if (PROVIDERS.ollama.isAvailable()) {
-    return { provider: PROVIDERS.ollama, modelId: bareModelId(req.modelId) ?? env.DEFAULT_CHAT_MODEL };
-  }
-
-  // (3) first available cloud provider
+  // (2) prefer cloud providers when they're configured — they're faster, more
+  //     reliable, and don't require a local install. Only fall back to Ollama
+  //     when no cloud key is present.
   for (const pid of CLOUD_PREFERENCE) {
     if (PROVIDERS[pid].isAvailable()) {
-      log.warn(`Ollama unreachable — falling back to ${pid}`);
       return { provider: PROVIDERS[pid], modelId: bareModelId(req.modelId) ?? defaultCloudModel(pid) };
     }
   }
+
+  // (3) Ollama if reachable — actually await the probe so we don't hang the chat
+  //     waiting on an unreachable local instance.
+  const ollamaUp = await probeOllama();
+  if (ollamaUp) {
+    return { provider: PROVIDERS.ollama, modelId: bareModelId(req.modelId) ?? env.DEFAULT_CHAT_MODEL };
+  }
+  log.warn("no cloud provider configured and Ollama unreachable");
 
   // none — return a "stub" provider with a friendly message
   return { provider: noProviderStub, modelId: "stub" };

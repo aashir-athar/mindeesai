@@ -48,17 +48,18 @@ function toOllamaMessages(messages: Message[], system?: string) {
   return out;
 }
 
+/** Properly-awaited probe. Use in the router instead of the synchronous isAvailable(). */
+export async function probeOllama(): Promise<boolean> {
+  return probe();
+}
+
 export const ollamaProvider: LLMProvider = {
   id: "ollama",
   isAvailable() {
-    // Returns the cached value synchronously. First call returns `true` optimistically;
-    // the next async probe corrects the cache for subsequent calls.
-    if (!availabilityCache) {
-      // fire-and-forget probe; assume available on cold start
-      probe().catch(() => undefined);
-      return true;
-    }
-    return availabilityCache.value;
+    // Synchronous check uses the cached value. First call returns `false`
+    // until the async probe completes — better to fall through to a configured
+    // cloud provider than to hang on an unreachable Ollama.
+    return availabilityCache?.value ?? false;
   },
 
   async *stream(req: LLMRequest): AsyncIterable<LLMStreamChunk> {
