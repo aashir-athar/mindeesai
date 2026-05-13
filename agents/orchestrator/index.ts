@@ -22,6 +22,8 @@ import {
   readThread,
 } from "@/lib/memory";
 import { persistPersonaQuick } from "@/lib/memory/persistence";
+import { touchMeta, getMeta } from "@/lib/threads/metadata";
+import { generateThreadTitle } from "@/lib/threads/title";
 import {
   readAffect,
   updateMood,
@@ -237,6 +239,26 @@ export async function* orchestrate(opts: {
   ]).catch((e) => log.warn("memory write failed", e));
 
   void recordDriftFromReply(finalAssistant.content);
+
+  // Thread metadata: titled on first turn, lastActivity bumped every turn
+  const priorMeta = await getMeta(threadId);
+  const isFirstTurn = !priorMeta || priorMeta.turns === 0;
+  await touchMeta(threadId, {
+    turns: (priorMeta?.turns ?? 0) + 1,
+    preview: priorMeta?.preview || userMessage.slice(0, 120),
+    lastUserMsg: userMessage.slice(0, 120),
+    lastAssistantMsg: finalAssistant.content.slice(0, 120),
+  });
+  if (isFirstTurn && finalAssistant.content) {
+    // Fire-and-forget title generation
+    void (async () => {
+      const title = await generateThreadTitle({
+        firstUserMessage: userMessage,
+        firstAssistantReply: finalAssistant.content,
+      });
+      if (title) await touchMeta(threadId, { title });
+    })();
+  }
 
   yield { type: "finish", message: finalAssistant };
 
