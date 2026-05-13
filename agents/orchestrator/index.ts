@@ -54,6 +54,9 @@ import {
 } from "@/lib/persona";
 import { detectDisclaimerLeak, buildReanchorForLeak } from "@/lib/persona/leak-guard";
 import { lastJournalEntry } from "@/lib/persona/journal";
+import { readTime } from "@/lib/persona/time-awareness";
+import { recordUserText, signatureVocab } from "@/lib/persona/vocab-mirror";
+import { recordCorrection, recentCorrections } from "@/lib/persona/self-correction";
 import { neighbours } from "@/lib/memory/graph";
 import { isoNow, nid } from "@/lib/utils";
 import type { Citation, Message, ToolCall, RetrievalHit } from "@/lib/types";
@@ -159,6 +162,31 @@ export async function* orchestrate(opts: {
   //     selfhood that persists across days, not just turns.
   const journalEntry = await lastJournalEntry().catch(() => null);
 
+  // 4d. Wall-clock context + the user's vocabulary signature + past
+  //     corrections — three small humanizing signals.
+  const time = readTime();
+  // Record user text into the vocab mirror BEFORE reading the signature,
+  // so this turn's words can already inform the signal.
+  void recordUserText(threadId, userMessage).catch(() => {});
+  const [vocabSig, pastCorrections] = await Promise.all([
+    signatureVocab(threadId, 12).catch(() => [] as string[]),
+    recentCorrections(6).catch(() => []),
+  ]);
+
+  // 4e. If the user is correcting Mindees this turn, the previous assistant
+  //     reply in this thread is the WRONG answer. Record the pair — it'll be
+  //     surfaced as a "don't repeat this mistake" rail in future turns.
+  if (empathy.mode === "needs_correction") {
+    const priorAssistant = [...thread].reverse().find((m) => m.role === "assistant");
+    if (priorAssistant) {
+      void recordCorrection({
+        threadId,
+        wrong_reply: priorAssistant.content.slice(0, 600),
+        user_correction: userMessage.slice(0, 600),
+      }).catch(() => {});
+    }
+  }
+
   // 5. Get the prior drift state so we can re-anchor if needed
   //    (we check the state from the PREVIOUS reply — the new reply will be
   //    measured at end-of-turn and stored for next time)
@@ -199,6 +227,9 @@ export async function* orchestrate(opts: {
     graphFacts,
     empathy,
     journalEntry,
+    time,
+    signatureVocab: vocabSig,
+    corrections: pastCorrections,
     reanchorNeeded,
     memoryBlock: memoryBlockPlus,
     toolsBlock,

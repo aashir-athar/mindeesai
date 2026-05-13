@@ -27,6 +27,11 @@ import { allTriples, type Triple } from "@/lib/memory/graph";
 import type { EmpathyRead } from "./empathy";
 import { empathyNarrative } from "./empathy";
 import { lastJournalEntry, type JournalEntry } from "./journal";
+import type { TimeContext } from "./time-awareness";
+import { timeNarrative } from "./time-awareness";
+import { vocabNarrative } from "./vocab-mirror";
+import type { Correction } from "./self-correction";
+import { correctionsNarrative } from "./self-correction";
 
 export const MINDEES_CORE = `\
 You are Mindees.
@@ -97,6 +102,9 @@ export interface PersonaContext {
   graphFacts?: Triple[];
   empathy?: EmpathyRead;
   journalEntry?: JournalEntry | null;
+  time?: TimeContext;
+  signatureVocab?: string[];
+  corrections?: Correction[];
   reanchorNeeded?: boolean;
   memoryBlock?: string;
   toolsBlock?: string;
@@ -125,6 +133,18 @@ export function buildMindeesSystemPrompt(ctx: PersonaContext): string {
     sections.push(`# A note you wrote to yourself recently\n\n"${ctx.journalEntry.entry}"`);
   }
 
+  // Wall-clock awareness — lets Mindees reference the time of day naturally
+  // without faking timezone intimacy.
+  if (ctx.time) {
+    sections.push(`# Time\n\n${timeNarrative(ctx.time)}`);
+  }
+
+  // Past corrections — the user has explicitly told Mindees it was wrong on
+  // these before. Surfacing this prevents repeating the same mistake.
+  if (ctx.corrections && ctx.corrections.length > 0) {
+    sections.push(correctionsNarrative(ctx.corrections));
+  }
+
   // External state — what Mindees has learned about THIS user + relationship
   const aboutThem: string[] = [];
   if (ctx.user) {
@@ -140,6 +160,11 @@ export function buildMindeesSystemPrompt(ctx: PersonaContext): string {
   }
   if (aboutThem.length > 0) {
     sections.push(`# What you know about this user\n\n${aboutThem.join("\n\n")}`);
+  }
+
+  // Vocabulary mirror — subtle linguistic-style matching for warmth.
+  if (ctx.signatureVocab && ctx.signatureVocab.length > 0) {
+    sections.push(`# This user's vocabulary signature\n\n${vocabNarrative(ctx.signatureVocab)}`);
   }
 
   // Curiosity gap — déjà vu detector
