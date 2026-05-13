@@ -38,6 +38,9 @@ coverage
 !.vscode/settings.json
 .DS_Store
 
+# Claude Code local session state — must NEVER be tracked
+.claude/
+
 # Logs
 *.log
 npm-debug.log*
