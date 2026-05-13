@@ -1,21 +1,28 @@
+# IMPORTANT: every pattern is ROOT-ANCHORED with a leading slash.
+# Bare `data/` would also strip `core/mindees-mind/data/` which contains
+# TypeScript source the runtime needs.
+
 # Don't ship runtime data — Vercel functions write to /tmp at runtime
-data/
-checkpoints/*.bin
-.next/cache
+/data/
+/checkpoints/*.bin
+
+# Don't ship the Next build cache
+/.next/cache
 
 # Don't ship Python training scripts to the serverless bundle
-scripts/train/
+/scripts/train/
 
 # Don't ship local secrets
-.env*.local
-.env.production
+/.env
+/.env.*
+!/.env.example
 
 # Don't ship dev artifacts
 *.log
 .pnpm-store
 node_modules/.cache
-tests/
-coverage/
+/tests/
+/coverage/
 
 # OS junk
 .DS_Store
