@@ -51,6 +51,37 @@ export interface AutoResearchDecision {
   topic: string;
 }
 
+/**
+ * Extract the most-research-worthy noun phrase from a free-text message.
+ * Cheap regex extractor — no LLM. Returns the longest capitalised
+ * multi-word entity, or the longest quoted phrase, or the longest
+ * content noun phrase.
+ *
+ * Why: passing the WHOLE user message as the research topic produces
+ * vague results. A focused topic ("React Server Components" instead of
+ * "I keep getting weird hydration errors with React Server Components
+ * — any idea what's going on?") gives the provider a query it can
+ * actually serve.
+ */
+function extractFocusedTopic(text: string): string | null {
+  // 1. Quoted phrases first (highest-confidence)
+  const quoted = /"([^"]{3,80})"/.exec(text);
+  if (quoted && quoted[1]) return quoted[1];
+
+  // 2. Capitalised multi-word terms (likely named entities / technical terms)
+  const caps = Array.from(text.matchAll(/\b([A-Z][a-zA-Z0-9]{1,20}(?:\s+[A-Z][a-zA-Z0-9]+){0,4})\b/g));
+  if (caps.length > 0) {
+    const longest = caps.map((m) => m[1] ?? "").sort((a, b) => b.length - a.length)[0];
+    if (longest && longest.length >= 4) return longest;
+  }
+
+  // 3. "about X" / "regarding X" / "on the topic of X"
+  const about = /\b(?:about|regarding|on the topic of|tell me about|explain) ((?:[a-z][a-zA-Z0-9-]*\s*){1,5})/.exec(text);
+  if (about && about[1]) return about[1].trim();
+
+  return null;
+}
+
 export function decideAutoResearch(opts: {
   userMessage: string;
   assistantReply: string;
@@ -70,25 +101,45 @@ export function decideAutoResearch(opts: {
     return { shouldResearch: false, reason: "chitchat", topic: "" };
   }
 
+  // Topic to research — prefer a focused extraction; fall back to the
+  // first 200 chars of the message.
+  const focusedTopic = extractFocusedTopic(opts.userMessage);
+  const topic = focusedTopic ?? opts.userMessage.slice(0, 200);
+
   // Trigger 1: Mindees hedged in the reply
   if (hedgeHit) {
     return {
       shouldResearch: true,
       reason: `hedged: "${hedgeHit}"`,
-      topic: opts.userMessage.slice(0, 200),
+      topic,
     };
   }
 
-  // Trigger 2: extremely novel question (no good memory match) and the user
-  // asked something concrete (>= 30 chars, contains ?, or imperative verbs)
+  // Trigger 2: high novelty + concrete question
   const hasQuestion = opts.userMessage.includes("?");
   const looksConcrete = opts.userMessage.length > 30 && (hasQuestion || /\b(what|how|when|where|who|why|tell me|explain)\b/i.test(opts.userMessage));
-  if (opts.curiosityNovelty > 0.75 && looksConcrete) {
+  if (opts.curiosityNovelty > 0.65 && looksConcrete) {
     return {
       shouldResearch: true,
       reason: `high novelty ${opts.curiosityNovelty.toFixed(2)}`,
-      topic: opts.userMessage.slice(0, 200),
+      topic,
     };
+  }
+
+  // Trigger 3 (NEW): user mentions a focused named entity Mindees should
+  // know about. Fires even without a hedge or extreme novelty — this is
+  // the "curious friend goes home and reads up on it" behaviour.
+  // Skip if the topic looks like common words the model definitely knows.
+  if (focusedTopic && focusedTopic.length >= 6 && opts.curiosityNovelty > 0.40) {
+    const lowered = focusedTopic.toLowerCase();
+    const COMMON = ["the user", "the same", "the way", "the only", "the thing", "the question"];
+    if (!COMMON.some((c) => lowered.startsWith(c))) {
+      return {
+        shouldResearch: true,
+        reason: `named-entity curiosity: "${focusedTopic}" (novelty ${opts.curiosityNovelty.toFixed(2)})`,
+        topic: focusedTopic,
+      };
+    }
   }
 
   return { shouldResearch: false, reason: "no trigger", topic: "" };
