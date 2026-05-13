@@ -97,36 +97,55 @@ jobs:
           import json, os, sys, urllib.request, urllib.error
           token = os.environ.get("BLOB_RW_TOKEN", "")
           if not token:
-              print("no BLOB_RW_TOKEN — skipping"); sys.exit(0)
-          # List blobs under the data/ prefix
+              print("✗ no BLOB_READ_WRITE_TOKEN secret in this repo")
+              print("  → set it in Settings → Secrets and variables → Actions")
+              print("  → training will use seed + dialogue corpora only")
+              sys.exit(0)
+          print(f"✓ BLOB_READ_WRITE_TOKEN present ({len(token)} chars)")
+
+          # List the prefix to see what IS in the store (helps diagnose
+          # "why isn't my chat data here yet")
           req = urllib.request.Request(
-              "https://blob.vercel-storage.com/?prefix=data/distill-corpus.jsonl&limit=1",
+              "https://blob.vercel-storage.com/?prefix=data/&limit=20",
               headers={"Authorization": f"Bearer {token}"},
           )
           try:
               with urllib.request.urlopen(req, timeout=30) as resp:
                   data = json.loads(resp.read())
           except urllib.error.HTTPError as e:
-              print(f"  list failed: {e.code} {e.reason}"); sys.exit(0)
-          except Exception as e:
-              print(f"  list error: {e}"); sys.exit(0)
-          blobs = data.get("blobs", [])
-          if not blobs:
-              print("  no distill-corpus.jsonl in Blob yet — training on seed corpus only")
+              print(f"✗ blob list failed: HTTP {e.code} {e.reason}")
+              print(f"  check that BLOB_READ_WRITE_TOKEN is the RW (not RO) token")
               sys.exit(0)
-          url = blobs[0].get("downloadUrl") or blobs[0].get("url")
+          except Exception as e:
+              print(f"✗ blob list error: {e}"); sys.exit(0)
+
+          blobs = data.get("blobs", [])
+          print(f"✓ blob list ok: {len(blobs)} files under data/ prefix")
+          for b in blobs[:10]:
+              print(f"  - {b.get('pathname','?')} ({b.get('size',0)} bytes)")
+
+          distill = next((b for b in blobs if b.get("pathname") == "data/distill-corpus.jsonl"), None)
+          if not distill:
+              print()
+              print("✗ no data/distill-corpus.jsonl in Blob.")
+              print("  This means: the app hasn't flushed the distill corpus yet. Two reasons:")
+              print("    1. No chat turns have happened in production yet.")
+              print("    2. MEMORY_PERSISTENCE env var is not set to 'vercel-blob' on Vercel.")
+              print("  Training will proceed on seed + dialogue corpora only.")
+              sys.exit(0)
+
+          url = distill.get("downloadUrl") or distill.get("url")
           if not url:
-              print("  blob entry has no url — skipping"); sys.exit(0)
+              print("✗ blob entry has no url — skipping"); sys.exit(0)
           try:
               with urllib.request.urlopen(url, timeout=60) as resp:
                   body = resp.read()
           except Exception as e:
-              print(f"  download error: {e}"); sys.exit(0)
+              print(f"✗ download error: {e}"); sys.exit(0)
           with open("data/distill-corpus.jsonl", "wb") as f:
               f.write(body)
-          # Count lines for visibility
           n = body.count(b"\n")
-          print(f"  fetched distill-corpus.jsonl: {n} turns ({len(body):,} bytes)")
+          print(f"✓ fetched distill-corpus.jsonl: {n} turns ({len(body):,} bytes)")
           PY
 
       - name: Train BPE tokenizer (if missing)

@@ -116,10 +116,17 @@ export async function persistAfterTick(): Promise<void> {
 }
 
 /**
- * Quick persona flush — only the small JSON state files that mutate on every
- * chat turn. Designed to run inside the /api/chat function (after the stream
- * yields its finish event) so Blob populates within seconds of each turn,
- * not only when the cron tick succeeds.
+ * Quick persona flush — the small JSON/JSONL state files that mutate on
+ * every chat turn. Designed to run inside the /api/chat function (after
+ * the stream yields its finish event) so Blob populates within seconds
+ * of each turn, not only when the cron tick succeeds.
+ *
+ * **Critical for the self-learning loop**: this is what gets
+ * `data/distill-corpus.jsonl` to Blob in time for the weekly pretrain
+ * workflow to pull a fresh copy. If a file mutates per-turn AND is
+ * needed by the training path, it MUST be in this list (otherwise the
+ * GH Action will only see the snapshot from the last successful cron
+ * tick, which can be up to 5 min stale).
  */
 export async function persistPersonaQuick(): Promise<void> {
   if (MODE !== "vercel-blob") return;
@@ -128,11 +135,27 @@ export async function persistPersonaQuick(): Promise<void> {
   const personaRoots = [
     path.join(DATA_DIR, "user-models"),
     path.join(DATA_DIR, "relationships"),
+    // v0.2.5+ per-thread tensors
+    path.join(DATA_DIR, "theory-of-mind"),
+    path.join(DATA_DIR, "vocab-mirror"),
+    path.join(DATA_DIR, "inner-voice"),
+    path.join(DATA_DIR, "rhythm"),
   ];
   const standaloneFiles = [
     path.join(DATA_DIR, "mood-state.json"),
     path.join(DATA_DIR, "persona-drift.json"),
     path.join(DATA_DIR, "replay-buffer.json"),
+    // v0.2.5+ append-style JSONLs & global tensors
+    path.join(DATA_DIR, "distill-corpus.jsonl"),     // ← critical for pretrain
+    path.join(DATA_DIR, "journal.jsonl"),
+    path.join(DATA_DIR, "corrections.jsonl"),
+    path.join(DATA_DIR, "auto-research-log.jsonl"),
+    path.join(DATA_DIR, "sentiment-arc.json"),
+    path.join(DATA_DIR, "topic-affinity.json"),
+    path.join(DATA_DIR, "runtime-flags.json"),
+    path.join(DATA_DIR, "reach-out.json"),
+    path.join(DATA_DIR, "currently-researching.json"),
+    path.join(DATA_DIR, "graph.json"),
   ];
 
   try {
