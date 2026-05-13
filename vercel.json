@@ -65,5 +65,11 @@
   "redirects": [
     { "source": "/github", "destination": "https://github.com/aashir-athar/mindeesai", "permanent": false },
     { "source": "/docs",   "destination": "https://github.com/aashir-athar/mindeesai#table-of-contents", "permanent": false }
+  ],
+  "crons": [
+    {
+      "path": "/api/cron/self-improve",
+      "schedule": "0 4 * * *"
+    }
   ]
 }

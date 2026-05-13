@@ -100,6 +100,27 @@ export function AdminClient() {
     }
   };
 
+  const [cronResult, setCronResult] = useState<string | null>(null);
+  const runCron = async () => {
+    setBusy(true);
+    setError(null);
+    setCronResult("running...");
+    try {
+      const res = await fetch("/api/cron/self-improve", {
+        method: "POST",
+        headers: headers(),
+      });
+      const j = await res.json();
+      setCronResult(JSON.stringify(j, null, 2).slice(0, 4000));
+      if (!j.ok) setError(j.error || `HTTP ${res.status}`);
+    } catch (e) {
+      setError((e as Error).message);
+      setCronResult(null);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div className="grid gap-8 max-w-3xl">
       {/* ─── Current mode card ─────────────────────────────────────────── */}
@@ -146,6 +167,37 @@ export function AdminClient() {
             {busy ? "…" : flags?.flags?.useNativeModel ? "Switch to CLOUD" : "Switch to NATIVE"}
           </button>
         </div>
+      </div>
+
+      {/* ─── Run cron now ───────────────────────────────────────────────── */}
+      <div className="border border-bone-800 rounded-md p-6 bg-bone-950">
+        <div className="flex justify-between items-start gap-6 flex-wrap mb-4">
+          <div className="flex-1 min-w-[260px]">
+            <p className="text-eyebrow mb-2">SELF-IMPROVEMENT CRON</p>
+            <p className="text-bone-300 text-sm leading-relaxed">
+              Manually fire <span className="font-mono">/api/cron/self-improve</span> right now.
+              Same endpoint cron-job.org and Vercel Cron hit. Useful for
+              verifying that reflection + autonomous research + journal +
+              training-tick actually work, without waiting for the next
+              scheduled invocation.
+            </p>
+            <p className="text-bone-500 text-xs font-mono mt-2">
+              Budget: 45s internal cap (vercel.json maxDuration: 60s on Hobby).
+            </p>
+          </div>
+          <button
+            onClick={() => void runCron()}
+            disabled={busy || !flags?.ok}
+            className="px-6 py-3 border border-emerald-700 hover:border-emerald-300 transition-colors rounded text-emerald-100 font-mono text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {busy ? "running…" : "Run cron now"}
+          </button>
+        </div>
+        {cronResult && (
+          <pre className="text-bone-300 text-[11px] font-mono bg-black border border-bone-900 rounded p-3 max-h-[280px] overflow-auto whitespace-pre-wrap break-all">
+            {cronResult}
+          </pre>
+        )}
       </div>
 
       {/* ─── Auth ──────────────────────────────────────────────────────── */}

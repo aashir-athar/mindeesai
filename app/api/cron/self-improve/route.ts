@@ -79,14 +79,21 @@ export async function POST(req: NextRequest) {
   log.info(`tick @ ${ranAt}: ${threads.length} threads to reflect on`);
 
   const abortCtrl = new AbortController();
-  // Soft budget: 4 minutes to leave headroom for the optimizer step.
-  const budget = setTimeout(() => abortCtrl.abort(new Error("cron budget exceeded")), 4 * 60 * 1000);
+  // Strict 45s budget — vercel.json caps this route at 60s on Hobby, so we
+  // need to leave headroom for the final persist step. Going over crashes
+  // the function and we lose the heartbeat + partial state.
+  const CRON_BUDGET_MS = 45_000;
+  const tickStart = Date.now();
+  const budget = setTimeout(() => abortCtrl.abort(new Error("cron budget exceeded")), CRON_BUDGET_MS);
+  const remainingMs = () => Math.max(0, CRON_BUDGET_MS - (Date.now() - tickStart));
 
   try {
-    // 1. Reflect on threads (bounded to ~10 to stay within budget)
+    // 1. Reflect on threads — bounded by remaining budget. Each reflect call
+    //    is ~3-8s, so we cap at ~3 threads to leave room for research +
+    //    journal + persist downstream.
     const reflections = [];
-    for (const t of threads.slice(0, 10)) {
-      if (abortCtrl.signal.aborted) break;
+    for (const t of threads.slice(0, 3)) {
+      if (abortCtrl.signal.aborted || remainingMs() < 12_000) break;
       const rs = await reflectOnThread(t.threadId, abortCtrl.signal).catch((e) => {
         log.warn(`reflect ${t.threadId} failed`, e);
         return [];
@@ -109,11 +116,14 @@ export async function POST(req: NextRequest) {
         pickCuriosityTopics(2),
         pickSelfCuriosityTopics(2),
       ]);
-      const topics = [...userGapTopics, ...selfTopics].slice(0, 4);
-      const researchBudget = setTimeout(() => abortCtrl.abort(new Error("research budget exceeded")), 90_000);
+      // Within Hobby's 60s window we can only afford ONE research call per tick
+      // (each can be 5-15s with the network round trip). Take the highest-
+      // priority topic from the merged stream.
+      const topics = [...userGapTopics, ...selfTopics].slice(0, 2);
+      const researchBudget = setTimeout(() => abortCtrl.abort(new Error("research budget exceeded")), Math.min(20_000, remainingMs()));
       try {
         for (const t of topics) {
-          if (abortCtrl.signal.aborted) break;
+          if (abortCtrl.signal.aborted || remainingMs() < 8_000) break;
           await setResearching(t.topic, `cron-${t.reason}`);
           try {
             const r = await research(t.topic, abortCtrl.signal);
@@ -148,32 +158,44 @@ export async function POST(req: NextRequest) {
       log.warn("auto-research stage failed", e);
     }
 
-    // 4. Self-journal — once every ~22h Mindees writes a private entry
-    //    to its own future self. Cheap (one small LLM call).
+    // 4. Self-journal — only attempt if we still have ≥10s budget; one Groq
+    //    call can take 3-8s and is gated to once-per-22h internally anyway.
     let journaled = false;
-    try {
-      const entry = await maybeWriteJournalEntry();
-      journaled = entry !== null;
-    } catch (e) {
-      log.warn("journal stage failed", e);
+    if (remainingMs() > 10_000) {
+      try {
+        const entry = await maybeWriteJournalEntry();
+        journaled = entry !== null;
+      } catch (e) {
+        log.warn("journal stage failed", e);
+      }
+    } else {
+      log.info(`skipping journal — ${remainingMs()}ms budget remaining`);
     }
 
-    // 4b. Compose the reach-out — what Mindees might say when the user
-    //     comes back after a gap. Cheap (no LLM call — just composition
-    //     from existing tensors).
+    // 4b. Compose the reach-out — pure composition, zero LLM cost, very fast.
+    //     Always runs even if budget is tight.
     try {
       await composeReachOut();
     } catch (e) {
       log.warn("reach-out compose failed", e);
     }
 
-    // 5. Flush LanceDB snapshot to Vercel Blob (no-op for MEMORY_PERSISTENCE != "vercel-blob")
+    // 5. Final heartbeat + flush. Mark success so /api/health sees it.
+    try {
+      await appendFile(
+        dataPath("cron-heartbeat.jsonl"),
+        JSON.stringify({ ts: isoNow(), event: "cron-end", elapsedMs: Date.now() - tickStart, reflections: reflections.length, research: researchSummary.length }) + "\n",
+        "utf8",
+      );
+    } catch { /* ignore */ }
     await persistAfterTick().catch((e) => log.warn("persist flush failed", e));
 
     return NextResponse.json({
       ok: true,
       ranAt,
-      threadsReflected: Math.min(threads.length, 10),
+      elapsedMs: Date.now() - tickStart,
+      remainingBudgetMs: remainingMs(),
+      threadsReflected: reflections.length > 0 ? Math.min(threads.length, 3) : 0,
       reflectionsTotal: reflections.length,
       autoResearch: researchSummary,
       journaled,
