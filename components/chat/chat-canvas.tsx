@@ -21,6 +21,7 @@ import { trust } from "@/lib/psychology/trust";
 import { nid } from "@/lib/utils";
 import { CitationPill } from "./citation-pill";
 import { MessageMarkdown } from "./message-markdown";
+import { ThreadSwitcher } from "./thread-switcher";
 
 type RecalledMemory = { text: string; score: number; source?: string };
 
@@ -186,15 +187,13 @@ export function ChatCanvas({ threadId }: { threadId: string }) {
             <ArrowLeft className="size-4" />
             Home
           </Link>
-          <span className="text-bone-500 text-xs font-mono">thread {threadId.slice(0, 8)}</span>
+          <span className="h-5 w-px bg-white/[0.08]" aria-hidden />
+          <ThreadSwitcher currentThreadId={threadId} />
         </div>
         <div className="flex items-center gap-5">
           {mood && <MoodPill mood={mood} />}
           <Link href="/dashboard" className="text-sm text-bone-300 hover:text-bone-100 transition-colors hidden sm:inline">
             Dashboard
-          </Link>
-          <Link href="/chat" className="text-sm text-bone-300 hover:text-bone-100 transition-colors">
-            + new thread
           </Link>
         </div>
       </header>
