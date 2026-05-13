@@ -158,6 +158,7 @@ export async function* orchestrate(opts: {
 
     let hopText = "";
     let hopReasoning = "";
+    let pendingBuf = ""; // buffer for in-stream tool-call leak detection
     const pendingTools: ToolCall[] = [];
 
     for await (const chunk of streamLLM({
@@ -170,9 +171,21 @@ export async function* orchestrate(opts: {
     })) {
       if (signal.aborted) break;
       if (chunk.type === "text" && chunk.text) {
-        hopText += chunk.text;
-        aggregatedText += chunk.text;
-        yield { type: "text", text: chunk.text };
+        pendingBuf += chunk.text;
+        // Parse out any LEAKED tool-call syntax — Groq/Llama-3 sometimes
+        // emits <function=...{...}</function> as plain text instead of using
+        // the structured tool_calls delta. We extract those into real tool
+        // calls and only yield clean text to the UI.
+        const parsed = extractToolCalls(pendingBuf);
+        if (parsed.extracted.length > 0) {
+          pendingTools.push(...parsed.extracted);
+        }
+        pendingBuf = parsed.unflushable;
+        if (parsed.safeText) {
+          hopText += parsed.safeText;
+          aggregatedText += parsed.safeText;
+          yield { type: "text", text: parsed.safeText };
+        }
       } else if (chunk.type === "thinking" && chunk.text) {
         hopReasoning += chunk.text;
       } else if (chunk.type === "tool-call" && chunk.toolCall) {
@@ -180,6 +193,14 @@ export async function* orchestrate(opts: {
       } else if (chunk.type === "finish") {
         break;
       }
+    }
+    // Final flush of any leftover buffer (e.g. tail of last token).
+    // If it's still an unclosed tag, drop it — better to lose a fragment
+    // than to render `<function=` to the user.
+    if (pendingBuf && !looksLikePartialTag(pendingBuf)) {
+      hopText += pendingBuf;
+      aggregatedText += pendingBuf;
+      yield { type: "text", text: pendingBuf };
     }
 
     if (hopReasoning) yield { type: "reasoning", text: hopReasoning };
@@ -271,6 +292,78 @@ export async function* orchestrate(opts: {
   } catch (e) {
     log.warn("persona quick-flush after chat failed", e);
   }
+}
+
+// ─── In-stream tool-call leak parser ──────────────────────────────────────
+//
+// Some cloud providers (notably Groq's Llama-3 family) occasionally emit
+// the function-call syntax as plain text instead of using the OpenAI-shaped
+// structured tool_calls delta. We catch BOTH formats:
+//
+//   <function=NAME{"key": "val"}</function>           ← Llama 3 native
+//   <function=NAME>{"key": "val"}</function>          ← variant
+//   <tool>{"name":"NAME","args":{...}}</tool>         ← our own format
+//
+// extractToolCalls() walks the buffer, pulls out every complete call as
+// a structured ToolCall, returns the text BEFORE/BETWEEN calls as
+// `safeText` to yield to the UI, and any unclosed trailing tag as
+// `unflushable` to keep buffering.
+
+const FUNCTION_RE = /<function=([a-z][a-z0-9_-]*)>?\s*(\{[\s\S]*?\})\s*<\/function>/gi;
+const TOOL_RE     = /<tool>\s*(\{[\s\S]*?\})\s*<\/tool>/gi;
+
+function extractToolCalls(buf: string): {
+  extracted: ToolCall[];
+  safeText: string;
+  unflushable: string;
+} {
+  const calls: ToolCall[] = [];
+  let cleaned = buf;
+
+  // Pull <function=NAME{...}</function>
+  cleaned = cleaned.replace(FUNCTION_RE, (_m, name: string, args: string) => {
+    try {
+      const parsed = JSON.parse(args);
+      calls.push({ id: nid(), name, args: parsed });
+    } catch {
+      log.warn("malformed leaked function call", args.slice(0, 80));
+    }
+    return ""; // strip from text
+  });
+
+  // Pull <tool>{...}</tool>
+  cleaned = cleaned.replace(TOOL_RE, (_m, json: string) => {
+    try {
+      const parsed = JSON.parse(json) as { name: string; args?: unknown };
+      if (parsed.name) calls.push({ id: nid(), name: parsed.name, args: parsed.args ?? {} });
+    } catch {
+      log.warn("malformed leaked tool call", json.slice(0, 80));
+    }
+    return "";
+  });
+
+  // What's safe to flush? Anything before the LAST `<` that could be the
+  // start of a future tag. Hold back the suffix as `unflushable`.
+  const lastLT = cleaned.lastIndexOf("<");
+  if (lastLT < 0) return { extracted: calls, safeText: cleaned, unflushable: "" };
+
+  const suffix = cleaned.slice(lastLT);
+  if (looksLikePartialTag(suffix)) {
+    return {
+      extracted: calls,
+      safeText: cleaned.slice(0, lastLT),
+      unflushable: suffix,
+    };
+  }
+  return { extracted: calls, safeText: cleaned, unflushable: "" };
+}
+
+/** Does this string fragment look like it could grow into a tool/function tag? */
+function looksLikePartialTag(s: string): boolean {
+  return (
+    /^<\/?(?:t|to|too|tool|tool>|f|fu|fun|func|funct|functi|functio|function|function=)/i.test(s) ||
+    s.startsWith("<")
+  );
 }
 
 function formatMemoryBlock(
