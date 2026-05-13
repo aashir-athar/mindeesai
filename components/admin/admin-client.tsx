@@ -100,6 +100,37 @@ export function AdminClient() {
     }
   };
 
+  const [githubPAT, setGithubPAT] = useState("");
+  const [trainResult, setTrainResult] = useState<string | null>(null);
+  useEffect(() => {
+    setGithubPAT(sessionStorage.getItem("mindees-github-pat") || "");
+  }, []);
+  const triggerTrain = async () => {
+    if (!githubPAT) {
+      setError("Paste a GitHub PAT (Actions: Read & Write scope) into the field below first.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setTrainResult("dispatching workflow...");
+    try {
+      sessionStorage.setItem("mindees-github-pat", githubPAT);
+      const res = await fetch("/api/admin/train", {
+        method: "POST",
+        headers: headers(),
+        body: JSON.stringify({ githubToken: githubPAT, ref: "main" }),
+      });
+      const j = await res.json();
+      setTrainResult(JSON.stringify(j, null, 2).slice(0, 2000));
+      if (!j.ok) setError(j.error || `HTTP ${res.status}`);
+    } catch (e) {
+      setError((e as Error).message);
+      setTrainResult(null);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const [cronResult, setCronResult] = useState<string | null>(null);
   const runCron = async () => {
     setBusy(true);
@@ -167,6 +198,47 @@ export function AdminClient() {
             {busy ? "…" : flags?.flags?.useNativeModel ? "Switch to CLOUD" : "Switch to NATIVE"}
           </button>
         </div>
+      </div>
+
+      {/* ─── Train Now (fire GitHub Actions pretrain workflow) ────────── */}
+      <div className="border border-bone-800 rounded-md p-6 bg-bone-950">
+        <div className="flex justify-between items-start gap-6 flex-wrap mb-4">
+          <div className="flex-1 min-w-[260px]">
+            <p className="text-eyebrow mb-2">TRAIN NOW</p>
+            <p className="text-bone-300 text-sm leading-relaxed">
+              Fires the GitHub Actions pretrain workflow on the <span className="font-mono">main</span> branch.
+              Streams ~30 minutes of CPU-only training on the seed corpus +
+              live distill corpus + dialogue corpus, then uploads
+              <span className="font-mono"> checkpoints/base.bin</span> to Vercel Blob.
+              Next Vercel cold-start hydrates the new weights.
+            </p>
+            <p className="text-bone-500 text-xs mt-2">
+              Needs a GitHub fine-grained PAT with <span className="font-mono">Actions: Read &amp; Write</span> on this repo.
+              Paste once, stays in sessionStorage. Never sent server-side.
+            </p>
+          </div>
+          <button
+            onClick={() => void triggerTrain()}
+            disabled={busy || !flags?.ok || !githubPAT}
+            className="px-6 py-3 border border-warm-600 hover:border-warm-300 transition-colors rounded text-warm-100 font-mono text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {busy ? "dispatching…" : "Run pretrain"}
+          </button>
+        </div>
+        <div className="flex gap-2 items-stretch mb-3">
+          <input
+            type="password"
+            value={githubPAT}
+            onChange={(e) => setGithubPAT(e.target.value)}
+            placeholder="ghp_... or github_pat_..."
+            className="flex-1 bg-black border border-bone-800 rounded px-3 py-2 text-bone-100 font-mono text-xs"
+          />
+        </div>
+        {trainResult && (
+          <pre className="text-bone-300 text-[11px] font-mono bg-black border border-bone-900 rounded p-3 max-h-[200px] overflow-auto whitespace-pre-wrap break-all">
+            {trainResult}
+          </pre>
+        )}
       </div>
 
       {/* ─── Run cron now ───────────────────────────────────────────────── */}
