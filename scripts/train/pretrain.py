@@ -369,6 +369,51 @@ def load_tokens(corpus_path: str, tokenizer_path: str, device) -> torch.Tensor:
     return torch.tensor(ids, dtype=torch.long, device=device)
 
 
+def load_distill_corpus(path: str, tokenizer_path: str, device) -> torch.Tensor:
+    """Load the live distillation corpus produced by the running app.
+
+    Format (JSONL, one row per chat turn):
+      { ts, threadId, system, user, assistant, tools, mood, goal }
+
+    We format each row into the chat template the TS runtime uses at
+    inference time, then tokenize. The model trained on this dataset
+    will naturally inherit the Mindees persona and the user's specific
+    conversation patterns.
+    """
+    if not Path(path).exists():
+        return torch.tensor([], dtype=torch.long, device=device)
+    print(f"loading distillation corpus: {path}", file=sys.stderr)
+    _vocab, by_pair = load_bpe(tokenizer_path)
+    text_parts: list[str] = []
+    skipped = 0
+    for line in Path(path).read_text(encoding="utf-8", errors="replace").splitlines():
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except Exception:
+            skipped += 1
+            continue
+        sys_p = (row.get("system") or "").strip()
+        usr = (row.get("user") or "").strip()
+        asn = (row.get("assistant") or "").strip()
+        if not usr or not asn:
+            skipped += 1
+            continue
+        # Chat template — same shape the TS orchestrator uses
+        text_parts.append(
+            f"<system>{sys_p}</system>\n<user>{usr}</user>\n<assistant>{asn}</assistant>\n"
+        )
+    if skipped:
+        print(f"  skipped {skipped} malformed/empty rows", file=sys.stderr)
+    if not text_parts:
+        return torch.tensor([], dtype=torch.long, device=device)
+    blob = "".join(text_parts)
+    ids = tokenize(blob, by_pair)
+    print(f"  distill corpus: {len(text_parts)} turns → {len(ids):,} tokens", file=sys.stderr)
+    return torch.tensor(ids, dtype=torch.long, device=device)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Optim / schedule
 # ─────────────────────────────────────────────────────────────────────────────
@@ -460,6 +505,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--variant", choices=list(VARIANTS), default="small")
     ap.add_argument("--corpus", required=True)
+    ap.add_argument("--distill-corpus", default=None, help="Optional path to data/distill-corpus.jsonl collected by the running app. Concatenated with --corpus at load time.")
     ap.add_argument("--tokenizer", default="../../tokenizer/tokenizer.json")
     ap.add_argument("--steps", type=int, default=50_000)
     ap.add_argument("--batch", type=int, default=8)
@@ -484,8 +530,15 @@ def main():
     cfg = VARIANTS[args.variant]
     print(f"device={device}  variant={cfg.variant}  use_moe={cfg.use_moe}  use_mla={cfg.use_mla}  use_mtp={cfg.use_mtp}")
 
-    # Data
+    # Data — base corpus + optional distillation corpus from the running app
     tokens = load_tokens(args.corpus, args.tokenizer, device="cpu")
+    if args.distill_corpus:
+        distill = load_distill_corpus(args.distill_corpus, args.tokenizer, device="cpu")
+        if distill.numel() > 0:
+            tokens = torch.cat([tokens, distill], dim=0)
+            print(f"  combined corpus: {len(tokens):,} tokens", file=sys.stderr)
+    if len(tokens) < 2 * cfg.context_length + 4:
+        raise SystemExit(f"corpus too small ({len(tokens)} tokens) for context_length={cfg.context_length}")
     n_val = max(2 * cfg.context_length, int(len(tokens) * args.val_frac))
     train_tokens = tokens[:-n_val].to(device)
     val_tokens = tokens[-n_val:].to(device)

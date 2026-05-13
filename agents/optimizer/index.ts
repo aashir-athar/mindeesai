@@ -16,6 +16,7 @@ import path from "node:path";
 import { promoteInsights } from "@/lib/memory/lancedb";
 import { consolidateMemories } from "@/lib/memory/consolidation";
 import { applyDecay as decaySkills } from "@/lib/persona/skill-mastery";
+import { idleExploreTick } from "@/lib/persona/idle-explore";
 import { selfImproveTick } from "@/core/mindees-mind";
 import { isoNow, nid, safeJson } from "@/lib/utils";
 import type { Reflection } from "@/lib/types";
@@ -68,6 +69,12 @@ export async function optimize(reflections: Reflection[], opts: { sinceMs: numbe
   //    recently fade gracefully, mirroring biological forgetting.
   try { await decaySkills(); } catch (e) { log.warn("skill decay failed", e); }
 
+  // 4b. Idle-time exploration: proactively research topics the user has
+  //     touched but Mindees has thin depth on. Genuine self-improvement
+  //     about the world even when the user isn't asking right now.
+  let idleExplore = { candidatesConsidered: 0, topicsResearched: [] as string[], durationMs: 0 };
+  try { idleExplore = await idleExploreTick(); } catch (e) { log.warn("idle-explore failed", e); }
+
   // 5. Run the native model's gradient-descent training tick
   let gradient = { loss: 0, tokens: 0, ms: 0 };
   try {
@@ -81,6 +88,7 @@ export async function optimize(reflections: Reflection[], opts: { sinceMs: numbe
     promotedInsights: highConf.length,
     retrievalWeightsUpdated,
     consolidation,
+    idleExplore,
     gradient,
   });
 
