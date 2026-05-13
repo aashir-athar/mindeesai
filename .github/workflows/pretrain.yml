@@ -235,8 +235,12 @@ jobs:
           token = os.environ.get("BLOB_RW_TOKEN", "")
           if not token:
               print("no BLOB_RW_TOKEN secret — skipping upload"); sys.exit(0)
+          # Note: the checkpoints/ blob prefix maps to CHECKPOINTS_DIR on the
+          # serverless side (which is /tmp/checkpoints on Vercel). Putting it
+          # under that prefix — instead of nested under lancedb/ — means the
+          # native model's checkpoint loader finds it on cold-start hydrate.
           targets = [
-            ("checkpoints/base.bin",        "lancedb/checkpoints/base.bin"),
+            ("checkpoints/base.bin",        "checkpoints/base.bin"),
             ("tokenizer/tokenizer.json",    "data/tokenizer.json"),
             ("data/training-metrics.jsonl", "data/training-metrics.jsonl"),
           ]

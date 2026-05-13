@@ -28,7 +28,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { env } from "@/lib/env";
-import { DATA_DIR } from "@/lib/paths";
+import { DATA_DIR, CHECKPOINTS_DIR } from "@/lib/paths";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("persistence");
@@ -43,10 +43,17 @@ let hydratedOnce = false;
 /**
  * Snapshot roots — both ends of the round-trip use these.
  * Each entry maps a local directory to its Blob prefix.
+ *
+ * **Checkpoints prefix is critical**: the GitHub Actions pretrain run
+ * uploads checkpoints/base.bin here, and `getMind()` calls hydrate
+ * before loading the checkpoint into the native model. Without this
+ * row, a freshly cold-started Vercel function never sees the trained
+ * weights and serves random-init output.
  */
 const SNAPSHOT_TARGETS: Array<{ localRoot: string; blobPrefix: string }> = [
-  { localRoot: LANCEDB_PATH, blobPrefix: "lancedb" },
-  { localRoot: DATA_DIR,     blobPrefix: "data" },
+  { localRoot: LANCEDB_PATH,   blobPrefix: "lancedb" },
+  { localRoot: DATA_DIR,       blobPrefix: "data" },
+  { localRoot: CHECKPOINTS_DIR, blobPrefix: "checkpoints" },
 ];
 
 /**

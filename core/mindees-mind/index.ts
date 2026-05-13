@@ -57,6 +57,18 @@ async function init(): Promise<{ model: ModelWeights; tokenizer: BpeTokenizer; c
 
   const model = initModel(cfg);
 
+  // Pull the latest checkpoint (and the rest of persisted state) from
+  // Vercel Blob BEFORE attempting to load weights. In `vercel-blob` mode
+  // this is the moment the cold function gets the trained brain; in
+  // local mode it's a no-op. Always fire-and-await — checkpoint loading
+  // depends on the file being on disk first.
+  try {
+    const { ensureLanceDBReady } = await import("@/lib/memory/persistence");
+    await ensureLanceDBReady();
+  } catch (e) {
+    log.warn("blob hydrate skipped/failed before checkpoint load", e);
+  }
+
   // Try to load the trained base.bin checkpoint. If present, this replaces
   // the random initial weights with real trained ones — the moment the
   // native model graduates from "random noise" to "actually learned".
