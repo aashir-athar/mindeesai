@@ -513,6 +513,7 @@ export async function* orchestrate(opts: {
   // prompt and YOUR conversation patterns.
   void appendDistillRow({
     ts: isoNow(),
+    assistantId: finalAssistant.id,
     threadId,
     system: systemPrompt,
     user: userMessage,

@@ -154,6 +154,7 @@ export async function persistPersonaQuick(): Promise<void> {
     path.join(DATA_DIR, "replay-buffer.json"),
     // v0.2.5+ append-style JSONLs & global tensors
     path.join(DATA_DIR, "distill-corpus.jsonl"),     // ← critical for pretrain
+    path.join(DATA_DIR, "distill-feedback.jsonl"),   // ← RLHF-lite filter for pretrain
     path.join(DATA_DIR, "journal.jsonl"),
     path.join(DATA_DIR, "corrections.jsonl"),
     path.join(DATA_DIR, "auto-research-log.jsonl"),

@@ -31,9 +31,12 @@ import { createLogger } from "@/lib/logger";
 
 const log = createLogger("distill-corpus");
 const FILE = dataPath("distill-corpus.jsonl");
+const FEEDBACK_FILE = dataPath("distill-feedback.jsonl");
 
 export interface DistillRow {
   ts: string;
+  /** Stable id of the assistant message — used to match thumb feedback later. */
+  assistantId?: string;
   threadId: string;
   system: string;
   user: string;
@@ -41,6 +44,12 @@ export interface DistillRow {
   tools?: string[];
   mood?: Record<string, number>;
   goal?: string;
+}
+
+export interface DistillFeedbackEvent {
+  ts: string;
+  assistantId: string;
+  signal: "up" | "down";
 }
 
 /**
@@ -56,5 +65,25 @@ export async function appendDistillRow(row: DistillRow): Promise<void> {
     await appendFile(FILE, JSON.stringify(row) + "\n", "utf8");
   } catch (e) {
     log.warn("distill row append failed", e);
+  }
+}
+
+/**
+ * Record thumb feedback against an assistant message id. The Python
+ * pretrain loader reads this file and:
+ *   - DROPS rows with "down" feedback entirely (don't teach the model the
+ *     thing the user said was wrong).
+ *   - DUPLICATES rows with "up" feedback (RLHF-lite — the kind of reply
+ *     that earned warmth gets sampled more often during pretraining).
+ *
+ * Untagged rows pass through with normal weight. This is the cleanest
+ * way to get RLHF-style filtering without rewriting append-only JSONL.
+ */
+export async function recordDistillFeedback(ev: DistillFeedbackEvent): Promise<void> {
+  try {
+    await mkdir(path.dirname(FEEDBACK_FILE), { recursive: true });
+    await appendFile(FEEDBACK_FILE, JSON.stringify(ev) + "\n", "utf8");
+  } catch (e) {
+    log.warn("distill feedback append failed", e);
   }
 }

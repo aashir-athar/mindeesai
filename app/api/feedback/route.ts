@@ -11,6 +11,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { recordThumb } from "@/core/mindees-mind/train/rlhf";
+import { recordDistillFeedback } from "@/lib/memory/distill-corpus";
 import { getRelationship, applyThumb, persistRelationship } from "@/lib/persona";
 
 export const runtime = "nodejs";
@@ -29,11 +30,13 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: "invalid body", detail: String(e) }, { status: 400 });
   }
 
-  // Persist for DPO + relationship-tensor update — in parallel
+  // Persist for DPO + relationship-tensor update + distill-corpus filter — in parallel
   const rel = await getRelationship(body.threadId);
+  const ts = new Date().toISOString();
   await Promise.all([
-    recordThumb({ ...body, createdAt: new Date().toISOString() }),
+    recordThumb({ ...body, createdAt: ts }),
     persistRelationship(applyThumb(rel, body.signal)),
+    recordDistillFeedback({ ts, assistantId: body.messageId, signal: body.signal }),
   ]);
 
   return NextResponse.json({ ok: true });

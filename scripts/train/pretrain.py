@@ -461,24 +461,61 @@ def load_tokens(corpus_path: str, tokenizer_path: str, device) -> torch.Tensor:
     return torch.tensor(ids, dtype=torch.long, device=device)
 
 
+def _load_distill_feedback(jsonl_path: Path) -> dict[str, str]:
+    """Read data/distill-feedback.jsonl → { assistantId: "up" | "down" }.
+    Last event wins (in case of double-thumb)."""
+    if not jsonl_path.exists():
+        return {}
+    out: dict[str, str] = {}
+    for line in jsonl_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not line.strip():
+            continue
+        try:
+            ev = json.loads(line)
+            aid = ev.get("assistantId")
+            sig = ev.get("signal")
+            if aid and sig in ("up", "down"):
+                out[aid] = sig
+        except Exception:
+            pass
+    return out
+
+
 def load_distill_corpus(path: str, tokenizer_path: str, device, completion_only: bool = True) -> tuple[torch.Tensor, torch.Tensor | None]:
     """Load the live distillation corpus produced by the running app.
 
     Format (JSONL, one row per chat turn):
-      { ts, threadId, system, user, assistant, tools, mood, goal }
+      { ts, assistantId, threadId, system, user, assistant, tools, mood, goal }
 
     We format each row into the chat template the TS runtime uses at
     inference time, then tokenize. Returns (token_ids, loss_mask) where
     loss_mask is 1 only on assistant-response tokens (canonical SFT) when
     completion_only=True; otherwise loss_mask is None (full-text loss).
+
+    **RLHF-lite filtering**: if data/distill-feedback.jsonl exists next
+    to the corpus file, rows are reweighted by 👍/👎:
+      down  → row is DROPPED entirely
+      up    → row is DUPLICATED (sampled ~2× more during training)
+      none  → row passes through with normal weight
+    Stats are logged so the operator can see the RL signal landing.
     """
     if not Path(path).exists():
         return torch.tensor([], dtype=torch.long, device=device), None
     print(f"loading distillation corpus: {path}", file=sys.stderr)
+
+    feedback_path = Path(path).parent / "distill-feedback.jsonl"
+    feedback = _load_distill_feedback(feedback_path)
+    if feedback:
+        up_n = sum(1 for v in feedback.values() if v == "up")
+        down_n = sum(1 for v in feedback.values() if v == "down")
+        print(f"  feedback signals loaded: {up_n} 👍  {down_n} 👎", file=sys.stderr)
+
     _vocab, by_pair = load_bpe(tokenizer_path)
     all_ids: list[int] = []
     all_mask: list[int] = []
     n_turns = 0
+    n_dropped_down = 0
+    n_duplicated_up = 0
     skipped = 0
     for line in Path(path).read_text(encoding="utf-8", errors="replace").splitlines():
         if not line.strip():
@@ -494,20 +531,31 @@ def load_distill_corpus(path: str, tokenizer_path: str, device, completion_only:
         if not usr or not asn:
             skipped += 1
             continue
+
+        # Apply thumb-filtering BEFORE tokenization to save work
+        aid = row.get("assistantId")
+        signal = feedback.get(aid) if aid else None
+        if signal == "down":
+            n_dropped_down += 1
+            continue
+        repeats = 2 if signal == "up" else 1
+        if signal == "up":
+            n_duplicated_up += 1
+
         prefix = f"<system>{sys_p}</system>\n<user>{usr}</user>\n<assistant>"
         completion = f"{asn}</assistant>\n"
         prefix_ids = tokenize(prefix, by_pair)
         completion_ids = tokenize(completion, by_pair)
-        all_ids.extend(prefix_ids)
-        all_ids.extend(completion_ids)
-        # Mask: 0 on prefix tokens (don't penalise the model for not
-        # reproducing the prompt), 1 on completion tokens (score the
-        # actual assistant response).
-        all_mask.extend([0] * len(prefix_ids))
-        all_mask.extend([1] * len(completion_ids))
+        for _ in range(repeats):
+            all_ids.extend(prefix_ids)
+            all_ids.extend(completion_ids)
+            all_mask.extend([0] * len(prefix_ids))
+            all_mask.extend([1] * len(completion_ids))
         n_turns += 1
     if skipped:
         print(f"  skipped {skipped} malformed/empty rows", file=sys.stderr)
+    if n_dropped_down or n_duplicated_up:
+        print(f"  RLHF-lite: dropped {n_dropped_down} 👎 rows · duplicated {n_duplicated_up} 👍 rows", file=sys.stderr)
     if not all_ids:
         return torch.tensor([], dtype=torch.long, device=device), None
     ids = torch.tensor(all_ids, dtype=torch.long, device=device)

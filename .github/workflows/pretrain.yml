@@ -124,6 +124,20 @@ jobs:
           for b in blobs[:10]:
               print(f"  - {b.get('pathname','?')} ({b.get('size',0)} bytes)")
 
+          # Helper to pull a single blob given its blob-list entry.
+          def _pull(entry, local_path):
+              url = entry.get("downloadUrl") or entry.get("url")
+              if not url:
+                  print(f"  ✗ {entry.get('pathname','?')} has no url"); return 0
+              try:
+                  with urllib.request.urlopen(url, timeout=60) as resp:
+                      body = resp.read()
+              except Exception as e:
+                  print(f"  ✗ download error for {entry.get('pathname','?')}: {e}"); return 0
+              with open(local_path, "wb") as f:
+                  f.write(body)
+              return len(body)
+
           distill = next((b for b in blobs if b.get("pathname") == "data/distill-corpus.jsonl"), None)
           if not distill:
               print()
@@ -134,18 +148,19 @@ jobs:
               print("  Training will proceed on seed + dialogue corpora only.")
               sys.exit(0)
 
-          url = distill.get("downloadUrl") or distill.get("url")
-          if not url:
-              print("✗ blob entry has no url — skipping"); sys.exit(0)
-          try:
-              with urllib.request.urlopen(url, timeout=60) as resp:
-                  body = resp.read()
-          except Exception as e:
-              print(f"✗ download error: {e}"); sys.exit(0)
-          with open("data/distill-corpus.jsonl", "wb") as f:
-              f.write(body)
-          n = body.count(b"\n")
-          print(f"✓ fetched distill-corpus.jsonl: {n} turns ({len(body):,} bytes)")
+          sz = _pull(distill, "data/distill-corpus.jsonl")
+          if sz:
+              n = sz  # rough; ok for log
+              print(f"✓ fetched distill-corpus.jsonl ({sz:,} bytes)")
+
+          # Also pull thumb-feedback if present — enables RLHF-lite filtering in pretrain.
+          feedback = next((b for b in blobs if b.get("pathname") == "data/distill-feedback.jsonl"), None)
+          if feedback:
+              fsz = _pull(feedback, "data/distill-feedback.jsonl")
+              if fsz:
+                  print(f"✓ fetched distill-feedback.jsonl ({fsz:,} bytes) — RLHF-lite filtering active")
+          else:
+              print("· no distill-feedback.jsonl yet (no thumbs given) — all rows weighted equally")
           PY
 
       - name: Train BPE tokenizer (if missing)
