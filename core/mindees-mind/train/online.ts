@@ -49,7 +49,7 @@ const METRICS_FILE = dataPath("training-metrics.jsonl");
 export interface TrainBatch {
   tokens: Int32Array;
   weights?: Float32Array;
-  source: "conversation" | "reflection" | "curriculum" | "dpo-chosen" | "dpo-rejected" | "constitutional";
+  source: "conversation" | "reflection" | "curriculum" | "dpo-chosen" | "dpo-rejected" | "constitutional" | "distill";
 }
 
 export interface TrainStepResult {

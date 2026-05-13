@@ -13,7 +13,7 @@ import path from "node:path";
 
 export type ReplayEntry = {
   tokens: number[];                       // Int32Array.toArray() — JSON-friendly
-  source: "conversation" | "reflection" | "curriculum" | "dpo-chosen" | "dpo-rejected" | "constitutional";
+  source: "conversation" | "reflection" | "curriculum" | "dpo-chosen" | "dpo-rejected" | "constitutional" | "distill";
   score: number;                          // higher = more useful as training signal
   createdAt: string;
 };

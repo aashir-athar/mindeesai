@@ -29,7 +29,7 @@ import { runCurriculum } from "./train/curriculum";
 import { buildPreferencePairs } from "./train/rlhf";
 import { selfCritiqueBatch } from "./train/constitutional";
 import { grpoStep, type GRPOExample, type RewardFn } from "./train/grpo";
-import { harvestConversationTokens, harvestReflectionTokens } from "./data/corpus";
+import { harvestConversationTokens, harvestReflectionTokens, harvestDistillTokens } from "./data/corpus";
 import { getReplayBuffer } from "./data/replay";
 import { runEval as _runEval } from "./eval/harness";
 import { critique } from "@/agents/critic";
@@ -149,6 +149,13 @@ export async function selfImproveTick(opts: { sinceMs: number; signal?: AbortSig
 
   const refl = await harvestReflectionTokens({ tokenizer, minConfidence: 0.7, maxTokens: 2048 });
   if (refl.length > 0) batches.push({ tokens: refl, source: "reflection" });
+
+  // Live distillation corpus — the gold-quality (user, assistant) pairs
+  // we already collect for the GitHub Actions pretrain run. Folding it
+  // into the 5-min online tick means the native model also tunes on it
+  // continuously, not just weekly.
+  const distill = await harvestDistillTokens({ tokenizer, maxRows: 32, maxTokens: 4096 });
+  if (distill.length > 0) batches.push({ tokens: distill, source: "distill" });
 
   if (!opts.signal?.aborted) {
     try {

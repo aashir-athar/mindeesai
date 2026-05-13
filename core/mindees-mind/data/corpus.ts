@@ -13,6 +13,7 @@ import { dataPath } from "@/lib/paths";
 
 const CONVERSATIONS_DIR = dataPath("conversations");
 const REFLECTIONS_DIR = dataPath("reflections");
+const DISTILL_FILE = dataPath("distill-corpus.jsonl");
 
 /** Encode one conversation as a token stream with chat-template specials. */
 export function encodeConversation(
@@ -65,6 +66,41 @@ export async function harvestConversationTokens(opts: {
     return results;
   } catch {
     return [];
+  }
+}
+
+/** Harvest the most recent N rows from the live distill corpus.
+ *
+ *  This is the gold-quality data path: every chat turn the app served
+ *  is recorded with system prompt + user + assistant + mood + goal.
+ *  Feeding it back into the online training tick closes the loop —
+ *  the next checkpoint inherits the EXACT register the orchestrator
+ *  spent so much effort enforcing at inference time.
+ */
+export async function harvestDistillTokens(opts: {
+  tokenizer: BpeTokenizer;
+  maxRows: number;
+  maxTokens: number;
+}): Promise<Int32Array> {
+  try {
+    const raw = await readFile(DISTILL_FILE, "utf8");
+    const lines = raw.split("\n").filter(Boolean).slice(-opts.maxRows);
+    const out: number[] = [SPECIAL_TOKENS.BOS];
+    for (const line of lines) {
+      let row: { user?: string; assistant?: string };
+      try { row = JSON.parse(line); } catch { continue; }
+      if (!row.user || !row.assistant) continue;
+      out.push(SPECIAL_TOKENS.USER);
+      for (const id of opts.tokenizer.encode(row.user)) out.push(id);
+      out.push(SPECIAL_TOKENS.EOS);
+      out.push(SPECIAL_TOKENS.ASSISTANT);
+      for (const id of opts.tokenizer.encode(row.assistant)) out.push(id);
+      out.push(SPECIAL_TOKENS.EOS);
+      if (out.length >= opts.maxTokens) break;
+    }
+    return new Int32Array(out.slice(0, opts.maxTokens));
+  } catch {
+    return new Int32Array(0);
   }
 }
 
