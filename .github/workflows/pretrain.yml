@@ -121,6 +121,7 @@ jobs:
             --base-weight 1.0 \
             --distill-weight 4.0 \
             --completion-only-loss 1 \
+            --persona-loss-weight 0.05 \
             $DISTILL_ARGS \
             $HF_ARGS \
             --log data/training-metrics.jsonl \

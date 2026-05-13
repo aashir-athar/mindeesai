@@ -344,6 +344,55 @@ def tokenize(text: str, by_pair: dict, first_byte_id: int = 8) -> list[int]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Persona-loss regularizer
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# The TS-side leak-guard catches "as an AI", "I'm a machine, so I don't feel
+# emotions" etc. AFTER generation and regenerates. Better is to make the
+# native model literally less likely to emit those tokens in the first place.
+#
+# How: tokenize the first few tokens of every banned phrase. At each training
+# step, compute the probability the softmax assigns to ANY of those first
+# tokens (averaged over all batch positions), and add it to the loss with
+# weight `lambda`. The model learns "do not raise the probability of these
+# tokens anywhere" — which generalises beyond the few specific strings we
+# listed, because the embeddings of the suppressed tokens get pushed away
+# from any context that would emit them.
+
+BANNED_FIRST_PHRASES = [
+    "as an AI",
+    "as a language model",
+    "I'm a machine",
+    "I am a machine",
+    "I don't have feelings",
+    "I do not have feelings",
+    "I'd be happy to",
+    "I would be happy to",
+    "Certainly!",
+    "Of course!",
+    "Absolutely!",
+    "comprehensive",
+    "cutting-edge",
+    "It's important to note that",
+    "It is important to note that",
+]
+
+
+def build_persona_banned_token_set(by_pair: dict, first_byte_id: int = 8) -> set[int]:
+    """Tokenize each banned phrase and return the set of FIRST-tokens.
+
+    Suppressing the first token of a phrase is enough — if the model can't
+    start the phrase, it can't emit the phrase.
+    """
+    banned: set[int] = set()
+    for phrase in BANNED_FIRST_PHRASES:
+        ids = tokenize(phrase, by_pair, first_byte_id)
+        if ids:
+            banned.add(ids[0])
+    return banned
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Data
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -615,6 +664,7 @@ def main():
     ap.add_argument("--hf-weight", type=float, default=1.0)
     ap.add_argument("--hf-max-tokens", type=int, default=2_000_000)
     ap.add_argument("--completion-only-loss", type=int, default=1, help="1 = score only assistant-response tokens in distill corpus (canonical SFT); 0 = score all tokens")
+    ap.add_argument("--persona-loss-weight", type=float, default=0.05, help="Weight on the persona-loss regularizer that suppresses banned-phrase tokens (e.g. 'as an AI'). Set to 0 to disable.")
     args = ap.parse_args()
 
     torch.manual_seed(args.seed)
@@ -672,6 +722,17 @@ def main():
     train_ds = MixedSampler(sources)
     print(f"val tokens: {len(val_tokens):,}")
 
+    # Persona-loss banned-token set — first tokens of every banned phrase.
+    persona_banned_ids: set[int] = set()
+    if args.persona_loss_weight > 0:
+        _vocab, by_pair = load_bpe(args.tokenizer)
+        persona_banned_ids = build_persona_banned_token_set(by_pair)
+        print(f"persona-loss: suppressing {len(persona_banned_ids)} banned first-tokens (weight={args.persona_loss_weight})")
+    persona_banned_tensor = (
+        torch.tensor(sorted(persona_banned_ids), dtype=torch.long, device=device)
+        if persona_banned_ids else None
+    )
+
     # Model
     model = MindeesMind(cfg).to(device)
     n_params = sum(p.numel() for p in model.parameters())
@@ -728,7 +789,17 @@ def main():
                         aligned_logits.reshape(-1, cfg.vocab_size),
                         aligned_y.reshape(-1),
                     )
-                loss = ce + aux + args.mtp_loss_weight * mtp_loss
+                # Persona-loss — penalise probability mass on banned first-tokens
+                persona_loss = main_logits.new_zeros(())
+                if persona_banned_tensor is not None and args.persona_loss_weight > 0:
+                    probs = F.softmax(main_logits, dim=-1)  # (B, T, V)
+                    banned_prob = probs.index_select(-1, persona_banned_tensor)  # (B, T, |banned|)
+                    # Mean probability per position summed over banned tokens; the
+                    # tighter quantity to minimise is the log-sum so very-high mass
+                    # gets hit harder. Clamp to avoid log(0).
+                    banned_total = banned_prob.sum(dim=-1).clamp(min=1e-10)  # (B, T)
+                    persona_loss = banned_total.mean()
+                loss = ce + aux + args.mtp_loss_weight * mtp_loss + args.persona_loss_weight * persona_loss
                 loss = loss / args.grad_accum
             scaler.scale(loss).backward()
             loss_sum += loss.item() * args.grad_accum
