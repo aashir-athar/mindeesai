@@ -1,4 +1,4 @@
-name: Pretrain MindeesAI (nano)
+name: Pretrain MindeesAI (small)
 
 # Runs the Python pretraining script on a GitHub-hosted CPU runner.
 # Free for public repos (2000 minutes/month on the standard `ubuntu-latest`).
