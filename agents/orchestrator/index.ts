@@ -22,6 +22,8 @@ import {
   readThread,
 } from "@/lib/memory";
 import { persistPersonaQuick } from "@/lib/memory/persistence";
+import { appendDistillRow } from "@/lib/memory/distill-corpus";
+import { studyTopic } from "@/lib/persona/skill-mastery";
 import { touchMeta, getMeta } from "@/lib/threads/metadata";
 import { generateThreadTitle } from "@/lib/threads/title";
 import {
@@ -324,8 +326,28 @@ export async function* orchestrate(opts: {
     void performAutoResearch({
       topic: autoResearchDecision.topic,
       signal,
+    }).then((result) => {
+      if (result && result.passages > 0) {
+        // Track this as a topic Mindees has studied
+        void studyTopic({ topic: autoResearchDecision.topic, via: "research", sourceCount: result.passages });
+      }
     }).catch((e) => log.warn("auto-research failed", e));
   }
+
+  // Persist this turn into the distillation corpus that pretrain.py will
+  // eventually consume. This is how the native model graduates: every Groq
+  // reply becomes one training pair, filtered through the Mindees persona
+  // prompt and YOUR conversation patterns.
+  void appendDistillRow({
+    ts: isoNow(),
+    threadId,
+    system: systemPrompt,
+    user: userMessage,
+    assistant: finalAssistant.content,
+    tools: pendingToolsForCorpus(citations),
+    mood: mood.values,
+    goal: goal.goal,
+  }).catch((e) => log.warn("distill corpus append failed", e));
 
   // Thread metadata: titled on first turn, lastActivity bumped every turn
   const priorMeta = await getMeta(threadId);
@@ -430,6 +452,15 @@ function looksLikePartialTag(s: string): boolean {
     /^<\/?(?:t|to|too|tool|tool>|f|fu|fun|func|funct|functi|functio|function|function=)/i.test(s) ||
     s.startsWith("<")
   );
+}
+
+/** Names of tools whose citations appear in this turn — used for corpus labelling. */
+function pendingToolsForCorpus(citations: Citation[]): string[] {
+  const out = new Set<string>();
+  for (const c of citations) {
+    if (c.source === "web") out.add("web-search");
+  }
+  return [...out];
 }
 
 function formatMemoryBlock(

@@ -14,6 +14,8 @@
 import { readFile, writeFile, mkdir, appendFile } from "node:fs/promises";
 import path from "node:path";
 import { promoteInsights } from "@/lib/memory/lancedb";
+import { consolidateMemories } from "@/lib/memory/consolidation";
+import { applyDecay as decaySkills } from "@/lib/persona/skill-mastery";
 import { selfImproveTick } from "@/core/mindees-mind";
 import { isoNow, nid, safeJson } from "@/lib/utils";
 import type { Reflection } from "@/lib/types";
@@ -55,7 +57,18 @@ export async function optimize(reflections: Reflection[], opts: { sinceMs: numbe
   // 2. Bump retrieval weights
   const retrievalWeightsUpdated = await bumpWeights(highConf);
 
-  // 3. Run the native model's gradient-descent training tick
+  // 3. Memory consolidation — dedupe similar memories, flag stale ones.
+  //    Fast, no LLM calls, runs every tick.
+  let consolidation = { scanned: 0, duplicates_found: 0, stale_flagged: 0, ms: 0 };
+  try {
+    consolidation = await consolidateMemories(30);
+  } catch (e) { log.warn("consolidation failed", e); }
+
+  // 4. Apply confidence decay to skill-mastery tracker — skills not studied
+  //    recently fade gracefully, mirroring biological forgetting.
+  try { await decaySkills(); } catch (e) { log.warn("skill decay failed", e); }
+
+  // 5. Run the native model's gradient-descent training tick
   let gradient = { loss: 0, tokens: 0, ms: 0 };
   try {
     gradient = await selfImproveTick({ sinceMs: opts.sinceMs, signal: opts.signal });
@@ -67,6 +80,7 @@ export async function optimize(reflections: Reflection[], opts: { sinceMs: numbe
     ranAt,
     promotedInsights: highConf.length,
     retrievalWeightsUpdated,
+    consolidation,
     gradient,
   });
 

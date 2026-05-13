@@ -1,0 +1,140 @@
+name: Pretrain MindeesAI (nano)
+
+# Runs the Python pretraining script on a GitHub-hosted CPU runner.
+# Free for public repos (2000 minutes/month on the standard `ubuntu-latest`).
+#
+# Triggers:
+#   - Manually from the Actions tab (workflow_dispatch)
+#   - Automatically on any push to a `train/*` branch
+#   - On a weekly schedule (Sundays at 03:00 UTC) so the model keeps
+#     accumulating training over time without anyone clicking anything
+#
+# Output:
+#   - tokenizer/tokenizer.json    (BPE trained on the corpus)
+#   - checkpoints/base.bin        (TS-loadable native model checkpoint)
+#   - both uploaded as workflow artifacts; can be downloaded + committed
+#     back to the repo, or pushed to Vercel Blob via the helper script.
+#
+# CPU-only training of the `nano` variant: ~12M params, ~2000 steps, ~30min.
+# Won't beat Groq, but the checkpoint is REAL — not random init — and
+# loading it into the TS runtime exercises the full pipeline end-to-end.
+
+on:
+  workflow_dispatch:
+    inputs:
+      variant:
+        description: 'Model variant (nano | small)'
+        required: false
+        default: 'nano'
+        type: choice
+        options: [nano, small]
+      steps:
+        description: 'Training steps'
+        required: false
+        default: '2000'
+      batch:
+        description: 'Batch size'
+        required: false
+        default: '4'
+  push:
+    branches:
+      - 'train/**'
+  schedule:
+    # Sundays 03:00 UTC. GitHub may delay scheduled runs by up to ~30 min.
+    - cron: '0 3 * * 0'
+
+jobs:
+  pretrain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350  # cap below the 360-minute hard limit
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install training deps (CPU-only torch)
+        run: |
+          python -m pip install --upgrade pip
+          # CPU wheel of torch — avoids GPU build sizes
+          pip install --index-url https://download.pytorch.org/whl/cpu torch
+          pip install -r scripts/train/requirements.txt
+
+      - name: Seed corpus
+        run: |
+          mkdir -p scripts/data
+          # If a real corpus isn't committed, scaffold a small editorial
+          # one so the workflow always succeeds and produces SOMETHING.
+          if [ ! -s scripts/data/corpus.txt ]; then
+            cat > scripts/data/corpus.txt <<'CORPUS'
+The model is not the world.
+The map is not the territory.
+A theory is only as good as the predictions it makes.
+Knowledge is power, but only when applied.
+We are what we repeatedly do.
+Intelligence is the ability to adapt to change.
+Curiosity precedes understanding.
+Compassion is intelligence applied to other people.
+The first principle is that you must not fool yourself.
+Patience is bitter, but its fruit is sweet.
+CORPUS
+          fi
+
+      - name: Train BPE tokenizer (if missing)
+        run: |
+          if [ ! -s tokenizer/tokenizer.json ]; then
+            python scripts/train/tokenizer_train.py \
+              --corpus scripts/data/corpus.txt \
+              --vocab-size 8000 \
+              --out tokenizer/tokenizer.json
+          fi
+
+      - name: Pretrain
+        env:
+          PYTORCH_ENABLE_MPS_FALLBACK: '1'
+          MIND_VARIANT: ${{ github.event.inputs.variant || 'nano' }}
+        run: |
+          VARIANT="${{ github.event.inputs.variant || 'nano' }}"
+          STEPS="${{ github.event.inputs.steps || '2000' }}"
+          BATCH="${{ github.event.inputs.batch || '4' }}"
+          mkdir -p checkpoints data
+          python scripts/train/pretrain.py \
+            --variant "$VARIANT" \
+            --corpus scripts/data/corpus.txt \
+            --tokenizer tokenizer/tokenizer.json \
+            --steps "$STEPS" \
+            --batch "$BATCH" \
+            --grad-accum 1 \
+            --lr 3e-4 \
+            --warmup 100 \
+            --val-frac 0.05 \
+            --val-every 200 \
+            --ckpt-every 500 \
+            --log data/training-metrics.jsonl \
+            --out checkpoints/base.bin \
+            --torch-ckpt checkpoints/torch-resume.pt
+
+      - name: Show metrics tail
+        run: |
+          echo "--- Last 10 training-log lines ---"
+          tail -n 10 data/training-metrics.jsonl || true
+          echo "--- Checkpoint size ---"
+          ls -lh checkpoints/ || true
+
+      - name: Upload checkpoint artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mindees-checkpoint-${{ github.run_number }}
+          path: |
+            checkpoints/base.bin
+            tokenizer/tokenizer.json
+            data/training-metrics.jsonl
+          retention-days: 30
+          if-no-files-found: error
