@@ -28,6 +28,8 @@ import {
 } from "@/lib/memory";
 import { persistPersonaQuick } from "@/lib/memory/persistence";
 import { appendDistillRow } from "@/lib/memory/distill-corpus";
+import { extractRegexTriples } from "@/lib/memory/regex-triples";
+import { addTriples } from "@/lib/memory/graph";
 import { studyTopic } from "@/lib/persona/skill-mastery";
 import { touchMeta, getMeta } from "@/lib/threads/metadata";
 import { getSummary, maybeUpdateSummary } from "@/lib/threads/summary";
@@ -103,6 +105,18 @@ export async function* orchestrate(opts: {
     createdAt: isoNow(),
   };
   await appendMessage(threadId, userTurn);
+
+  // 1b. Regex-triple extraction — synchronous self-disclosure capture.
+  //     Runs on EVERY user message, zero LLM cost. Lands triples into
+  //     graph.json (which the LLM-based extractor in step 8 will later
+  //     supplement). This is the loop that actually grows the
+  //     /memory-graph page from "2 triples" to "real knowledge base."
+  void (async () => {
+    const triples = extractRegexTriples(userMessage);
+    if (triples.length > 0) {
+      await addTriples(triples).catch((e) => log.warn("regex triples persist failed", e));
+    }
+  })();
 
   // 2. Read affect + empathy → update all per-turn tensors in parallel.
   //    Affect is the rule-based read; we ALSO try a neural read (transformers.js,
