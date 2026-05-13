@@ -28,7 +28,7 @@ import {
 } from "@/lib/memory";
 import { persistPersonaQuick } from "@/lib/memory/persistence";
 import { appendDistillRow } from "@/lib/memory/distill-corpus";
-import { extractRegexTriples } from "@/lib/memory/regex-triples";
+import { extractRegexTriples, extractSelfTriples } from "@/lib/memory/regex-triples";
 import { addTriples } from "@/lib/memory/graph";
 import { studyTopic } from "@/lib/persona/skill-mastery";
 import { touchMeta, getMeta } from "@/lib/threads/metadata";
@@ -526,6 +526,16 @@ export async function* orchestrate(opts: {
     userMessage,
     assistantReply: finalAssistant.content,
   }).catch((e) => log.warn("kg extract failed", e));
+
+  // Self-fact extraction — capture Mindees's OWN claims about itself from
+  // its reply. Future replies see these as graphFacts about "mindees" and
+  // can stay coherent ("you said last week you prefer Rust" stays true).
+  void (async () => {
+    const selfTriples = extractSelfTriples(finalAssistant.content);
+    if (selfTriples.length > 0) {
+      await addTriples(selfTriples).catch((e) => log.warn("self-triple persist failed", e));
+    }
+  })();
 
   // AUTO-RESEARCH: if Mindees hedged or the question was high-novelty AND
   // web-search didn't already fire, kick off a background research call so
