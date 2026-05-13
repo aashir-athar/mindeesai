@@ -57,9 +57,25 @@ async function init(): Promise<{ model: ModelWeights; tokenizer: BpeTokenizer; c
 
   const model = initModel(cfg);
 
+  // Try to load the trained base.bin checkpoint. If present, this replaces
+  // the random initial weights with real trained ones — the moment the
+  // native model graduates from "random noise" to "actually learned".
+  try {
+    const { loadNativeCheckpoint } = await import("./model/load-checkpoint");
+    const result = await loadNativeCheckpoint(model);
+    if (result.loaded) {
+      log.info(`✓ native checkpoint loaded: ${result.tensors_loaded} tensors (${result.tensors_skipped} skipped) from ${result.path}`);
+    } else {
+      log.info(`no native checkpoint yet (${result.reason ?? "n/a"}). Running with freshly-initialised weights — inference still goes through the LLM router until a checkpoint exists.`);
+    }
+  } catch (e) {
+    log.warn("checkpoint loader failed", e);
+  }
+
+  // Probe for a LoRA delta on top of the base (online-tick updates)
   try {
     await readFile(checkpointPath("lora-latest.bin"));
-    log.info("LoRA checkpoint detected (deserialiser is a follow-up; weights remain freshly initialised)");
+    log.info("LoRA delta detected (online-tick updates) — deserialiser pending");
   } catch { /* none */ }
 
   return { model, tokenizer, cfg };
