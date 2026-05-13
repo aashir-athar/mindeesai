@@ -36,6 +36,14 @@ on:
         description: 'Batch size'
         required: false
         default: '4'
+      hf_dataset:
+        description: 'Optional HuggingFace dataset for streaming augmentation (e.g. roneneldan/TinyStories)'
+        required: false
+        default: ''
+      hf_max_tokens:
+        description: 'Cap on tokens streamed from HF (RAM bound)'
+        required: false
+        default: '500000'
   push:
     branches:
       - 'train/**'
@@ -88,6 +96,16 @@ jobs:
           STEPS="${{ github.event.inputs.steps || '2000' }}"
           BATCH="${{ github.event.inputs.batch || '4' }}"
           mkdir -p checkpoints data
+          HF_ARGS=""
+          HF_DS="${{ github.event.inputs.hf_dataset || '' }}"
+          HF_MAX="${{ github.event.inputs.hf_max_tokens || '500000' }}"
+          if [ -n "$HF_DS" ]; then
+            HF_ARGS="--hf-dataset $HF_DS --hf-max-tokens $HF_MAX --hf-weight 2.0"
+          fi
+          DISTILL_ARGS=""
+          if [ -s data/distill-corpus.jsonl ]; then
+            DISTILL_ARGS="--distill-corpus data/distill-corpus.jsonl"
+          fi
           python scripts/train/pretrain.py \
             --variant "$VARIANT" \
             --corpus scripts/data/corpus.txt \
@@ -100,6 +118,11 @@ jobs:
             --val-frac 0.05 \
             --val-every 200 \
             --ckpt-every 500 \
+            --base-weight 1.0 \
+            --distill-weight 4.0 \
+            --completion-only-loss 1 \
+            $DISTILL_ARGS \
+            $HF_ARGS \
             --log data/training-metrics.jsonl \
             --out checkpoints/base.bin \
             --torch-ckpt checkpoints/torch-resume.pt

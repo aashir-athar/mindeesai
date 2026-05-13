@@ -348,17 +348,60 @@ def tokenize(text: str, by_pair: dict, first_byte_id: int = 8) -> list[int]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class StreamingTextDataset:
-    """Memory-mapped token stream — random contiguous-window sampler."""
+    """Memory-mapped token stream — random contiguous-window sampler.
 
-    def __init__(self, tokens: torch.Tensor, context: int):
+    Also returns an optional `loss_mask` (1 where loss should count, 0 where it
+    shouldn't). For pure pretraining text the mask is None; for distillation
+    rows we mask out the system+user prefix so loss only flows on the
+    assistant response (the SFT canonical setup).
+    """
+
+    def __init__(self, tokens: torch.Tensor, context: int, loss_mask: torch.Tensor | None = None):
         self.tokens = tokens
         self.context = context
+        self.loss_mask = loss_mask  # same shape as tokens; 1=score, 0=ignore
 
-    def sample(self, batch_size: int, device) -> tuple[torch.Tensor, torch.Tensor]:
+    def sample(self, batch_size: int, device) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
         idx = torch.randint(0, len(self.tokens) - self.context - 1, (batch_size,), device=device)
         x = torch.stack([self.tokens[i : i + self.context] for i in idx])
         y = torch.stack([self.tokens[i + 1 : i + self.context + 1] for i in idx])
-        return x, y
+        if self.loss_mask is None:
+            return x, y, None
+        m = torch.stack([self.loss_mask[i + 1 : i + self.context + 1] for i in idx])
+        return x, y, m
+
+
+class MixedSampler:
+    """Probability-weighted multiplexer across multiple StreamingTextDatasets.
+
+    The whole point: weight HIGH-quality data (the live distillation corpus
+    of real Mindees↔user turns) more than the base seed corpus. Standard
+    practice in the production-grade LLM training literature (Llama 3,
+    DeepSeek-V3, GPT-NeoX all use this).
+    """
+
+    def __init__(self, sources: list[tuple[StreamingTextDataset, float, str]]):
+        # sources = [(dataset, weight, label), ...]
+        non_empty = [(d, w, lbl) for d, w, lbl in sources if len(d.tokens) > d.context + 1 and w > 0]
+        if not non_empty:
+            raise SystemExit("no non-empty data sources after filtering")
+        self.sources = non_empty
+        total = sum(w for _, w, _ in self.sources)
+        self.probs = [w / total for _, w, _ in self.sources]
+        self.labels = [lbl for _, _, lbl in self.sources]
+        print(f"mixed sampler: {[(lbl, f'{p:.0%}') for lbl, p in zip(self.labels, self.probs)]}", file=sys.stderr)
+
+    def sample(self, batch_size: int, device) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+        # Pick a single source for the whole batch — cheaper than per-row
+        # picking and the difference washes out over many steps.
+        r = torch.rand(()).item()
+        cum = 0.0
+        for (ds, _, _), p in zip(self.sources, self.probs):
+            cum += p
+            if r <= cum:
+                return ds.sample(batch_size, device)
+        # Fallback (floating-point edge)
+        return self.sources[-1][0].sample(batch_size, device)
 
 
 def load_tokens(corpus_path: str, tokenizer_path: str, device) -> torch.Tensor:
@@ -369,22 +412,24 @@ def load_tokens(corpus_path: str, tokenizer_path: str, device) -> torch.Tensor:
     return torch.tensor(ids, dtype=torch.long, device=device)
 
 
-def load_distill_corpus(path: str, tokenizer_path: str, device) -> torch.Tensor:
+def load_distill_corpus(path: str, tokenizer_path: str, device, completion_only: bool = True) -> tuple[torch.Tensor, torch.Tensor | None]:
     """Load the live distillation corpus produced by the running app.
 
     Format (JSONL, one row per chat turn):
       { ts, threadId, system, user, assistant, tools, mood, goal }
 
     We format each row into the chat template the TS runtime uses at
-    inference time, then tokenize. The model trained on this dataset
-    will naturally inherit the Mindees persona and the user's specific
-    conversation patterns.
+    inference time, then tokenize. Returns (token_ids, loss_mask) where
+    loss_mask is 1 only on assistant-response tokens (canonical SFT) when
+    completion_only=True; otherwise loss_mask is None (full-text loss).
     """
     if not Path(path).exists():
-        return torch.tensor([], dtype=torch.long, device=device)
+        return torch.tensor([], dtype=torch.long, device=device), None
     print(f"loading distillation corpus: {path}", file=sys.stderr)
     _vocab, by_pair = load_bpe(tokenizer_path)
-    text_parts: list[str] = []
+    all_ids: list[int] = []
+    all_mask: list[int] = []
+    n_turns = 0
     skipped = 0
     for line in Path(path).read_text(encoding="utf-8", errors="replace").splitlines():
         if not line.strip():
@@ -400,18 +445,56 @@ def load_distill_corpus(path: str, tokenizer_path: str, device) -> torch.Tensor:
         if not usr or not asn:
             skipped += 1
             continue
-        # Chat template — same shape the TS orchestrator uses
-        text_parts.append(
-            f"<system>{sys_p}</system>\n<user>{usr}</user>\n<assistant>{asn}</assistant>\n"
-        )
+        prefix = f"<system>{sys_p}</system>\n<user>{usr}</user>\n<assistant>"
+        completion = f"{asn}</assistant>\n"
+        prefix_ids = tokenize(prefix, by_pair)
+        completion_ids = tokenize(completion, by_pair)
+        all_ids.extend(prefix_ids)
+        all_ids.extend(completion_ids)
+        # Mask: 0 on prefix tokens (don't penalise the model for not
+        # reproducing the prompt), 1 on completion tokens (score the
+        # actual assistant response).
+        all_mask.extend([0] * len(prefix_ids))
+        all_mask.extend([1] * len(completion_ids))
+        n_turns += 1
     if skipped:
         print(f"  skipped {skipped} malformed/empty rows", file=sys.stderr)
-    if not text_parts:
-        return torch.tensor([], dtype=torch.long, device=device)
-    blob = "".join(text_parts)
-    ids = tokenize(blob, by_pair)
-    print(f"  distill corpus: {len(text_parts)} turns → {len(ids):,} tokens", file=sys.stderr)
-    return torch.tensor(ids, dtype=torch.long, device=device)
+    if not all_ids:
+        return torch.tensor([], dtype=torch.long, device=device), None
+    ids = torch.tensor(all_ids, dtype=torch.long, device=device)
+    mask = torch.tensor(all_mask, dtype=torch.float32, device=device) if completion_only else None
+    print(f"  distill corpus: {n_turns} turns → {len(ids):,} tokens (completion_only={completion_only})", file=sys.stderr)
+    return ids, mask
+
+
+def load_hf_streaming(name: str, config: str | None, split: str, tokenizer_path: str, max_tokens: int = 2_000_000) -> torch.Tensor:
+    """Pull from a HuggingFace dataset in streaming mode (no full download).
+
+    Cheap text augmentation for the base corpus. Caps at max_tokens so a
+    CPU-only GitHub Actions runner doesn't OOM. Common choices for general
+    English pretraining:
+      - 'HuggingFaceFW/fineweb-edu', config='sample-10BT'  (high-quality web)
+      - 'wikipedia', config='20220301.en'                   (general knowledge)
+      - 'roneneldan/TinyStories'                            (tiny model warmup)
+    """
+    try:
+        from datasets import load_dataset  # type: ignore
+    except ImportError:
+        print(f"  hf streaming requested for {name} but `datasets` not installed — skipping", file=sys.stderr)
+        return torch.tensor([], dtype=torch.long)
+    print(f"streaming HF dataset: {name} ({config or 'default'}) split={split}, cap={max_tokens:,} tokens", file=sys.stderr)
+    _vocab, by_pair = load_bpe(tokenizer_path)
+    ds = load_dataset(name, config, split=split, streaming=True) if config else load_dataset(name, split=split, streaming=True)
+    ids: list[int] = []
+    for row in ds:
+        text = row.get("text") or row.get("content") or ""
+        if not isinstance(text, str) or not text.strip():
+            continue
+        ids.extend(tokenize(text + "\n", by_pair))
+        if len(ids) >= max_tokens:
+            break
+    print(f"  hf {name}: {len(ids):,} tokens", file=sys.stderr)
+    return torch.tensor(ids, dtype=torch.long)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -523,6 +606,15 @@ def main():
     ap.add_argument("--amp", action="store_true", help="enable mixed-precision training")
     ap.add_argument("--seed", type=int, default=1337)
     ap.add_argument("--mtp-loss-weight", type=float, default=0.20)
+    # Corpus weighting & HF streaming
+    ap.add_argument("--base-weight", type=float, default=1.0, help="Sampling weight for the seed --corpus")
+    ap.add_argument("--distill-weight", type=float, default=4.0, help="Sampling weight for distill corpus (real Mindees↔user turns — HIGH quality, sample more often)")
+    ap.add_argument("--hf-dataset", default=None, help="Optional HuggingFace dataset name for streaming pretraining augmentation (e.g. 'roneneldan/TinyStories')")
+    ap.add_argument("--hf-config", default=None)
+    ap.add_argument("--hf-split", default="train")
+    ap.add_argument("--hf-weight", type=float, default=1.0)
+    ap.add_argument("--hf-max-tokens", type=int, default=2_000_000)
+    ap.add_argument("--completion-only-loss", type=int, default=1, help="1 = score only assistant-response tokens in distill corpus (canonical SFT); 0 = score all tokens")
     args = ap.parse_args()
 
     torch.manual_seed(args.seed)
@@ -530,21 +622,55 @@ def main():
     cfg = VARIANTS[args.variant]
     print(f"device={device}  variant={cfg.variant}  use_moe={cfg.use_moe}  use_mla={cfg.use_mla}  use_mtp={cfg.use_mtp}")
 
-    # Data — base corpus + optional distillation corpus from the running app
-    tokens = load_tokens(args.corpus, args.tokenizer, device="cpu")
-    if args.distill_corpus:
-        distill = load_distill_corpus(args.distill_corpus, args.tokenizer, device="cpu")
-        if distill.numel() > 0:
-            tokens = torch.cat([tokens, distill], dim=0)
-            print(f"  combined corpus: {len(tokens):,} tokens", file=sys.stderr)
-    if len(tokens) < 2 * cfg.context_length + 4:
-        raise SystemExit(f"corpus too small ({len(tokens)} tokens) for context_length={cfg.context_length}")
-    n_val = max(2 * cfg.context_length, int(len(tokens) * args.val_frac))
-    train_tokens = tokens[:-n_val].to(device)
-    val_tokens = tokens[-n_val:].to(device)
-    train_ds = StreamingTextDataset(train_tokens, cfg.context_length)
+    # Data — three weighted sources:
+    #   1. base corpus (seeded by repo, scripts/data/corpus.txt)
+    #   2. distillation corpus (live chat turns from the running app — gold quality)
+    #   3. HF streaming dataset (optional, broad general English)
+    base_tokens = load_tokens(args.corpus, args.tokenizer, device="cpu")
+    if len(base_tokens) < 2 * cfg.context_length + 4:
+        raise SystemExit(f"base corpus too small ({len(base_tokens)} tokens) for context_length={cfg.context_length}")
+
+    # Hold-out validation slice comes from the base corpus tail (stable evaluation signal)
+    n_val = max(2 * cfg.context_length, int(len(base_tokens) * args.val_frac))
+    val_tokens = base_tokens[-n_val:].to(device)
+    base_train = base_tokens[:-n_val].to(device)
     val_ds = StreamingTextDataset(val_tokens, cfg.context_length)
-    print(f"train tokens: {len(train_tokens):,}  val tokens: {len(val_tokens):,}")
+
+    sources: list[tuple[StreamingTextDataset, float, str]] = [
+        (StreamingTextDataset(base_train, cfg.context_length), args.base_weight, f"base({len(base_train):,}tok)"),
+    ]
+
+    if args.distill_corpus:
+        distill_ids, distill_mask = load_distill_corpus(
+            args.distill_corpus,
+            args.tokenizer,
+            device="cpu",
+            completion_only=bool(args.completion_only_loss),
+        )
+        if distill_ids.numel() > 2 * cfg.context_length + 4:
+            distill_ids = distill_ids.to(device)
+            distill_mask = distill_mask.to(device) if distill_mask is not None else None
+            sources.append((
+                StreamingTextDataset(distill_ids, cfg.context_length, distill_mask),
+                args.distill_weight,
+                f"distill({len(distill_ids):,}tok,mask={distill_mask is not None})",
+            ))
+
+    if args.hf_dataset:
+        hf_ids = load_hf_streaming(
+            args.hf_dataset, args.hf_config, args.hf_split,
+            args.tokenizer, max_tokens=args.hf_max_tokens,
+        )
+        if hf_ids.numel() > 2 * cfg.context_length + 4:
+            hf_ids = hf_ids.to(device)
+            sources.append((
+                StreamingTextDataset(hf_ids, cfg.context_length),
+                args.hf_weight,
+                f"hf:{args.hf_dataset}({len(hf_ids):,}tok)",
+            ))
+
+    train_ds = MixedSampler(sources)
+    print(f"val tokens: {len(val_tokens):,}")
 
     # Model
     model = MindeesMind(cfg).to(device)
@@ -575,10 +701,21 @@ def main():
         # micro-batches for gradient accumulation
         loss_sum = 0.0
         for _ in range(args.grad_accum):
-            x, y = train_ds.sample(args.batch, device)
+            x, y, loss_mask = train_ds.sample(args.batch, device)
             with autocast(device_type=device, enabled=args.amp and device == "cuda", dtype=torch.bfloat16 if device == "cuda" else torch.float32):
                 main_logits, mtp_logits, aux = model(x)
-                ce = F.cross_entropy(main_logits.view(-1, cfg.vocab_size), y.view(-1))
+                if loss_mask is None:
+                    ce = F.cross_entropy(main_logits.view(-1, cfg.vocab_size), y.view(-1))
+                else:
+                    # Per-token CE, then mean over only the masked positions
+                    per_tok = F.cross_entropy(
+                        main_logits.view(-1, cfg.vocab_size),
+                        y.view(-1),
+                        reduction="none",
+                    )
+                    flat_mask = loss_mask.view(-1)
+                    denom = flat_mask.sum().clamp_min(1.0)
+                    ce = (per_tok * flat_mask).sum() / denom
                 # MTP auxiliary losses — each head predicts token shifted by (depth)
                 mtp_loss = main_logits.new_zeros(())
                 for d_i, head_logits in enumerate(mtp_logits):
@@ -618,7 +755,7 @@ def main():
         if (step + 1) % args.val_every == 0:
             model.eval()
             with torch.no_grad():
-                vx, vy = val_ds.sample(args.batch, device)
+                vx, vy, _ = val_ds.sample(args.batch, device)
                 vlogits, _, _ = model(vx)
                 vloss = F.cross_entropy(vlogits.view(-1, cfg.vocab_size), vy.view(-1)).item()
             tqdm.write(f"  step={step + 1}  train={accum_loss:.4f}  val={vloss:.4f}  lr={cur_lr:.2e}")
