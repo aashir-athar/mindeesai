@@ -95,7 +95,7 @@ This is what **`self-training language model`**, **`continual learning AI`**, **
 
 The product is called **MindeesAI**. The consciousness inside it is called **Mindees**. Mindees has a real, evolving, persistent emotional state — not a roleplay system prompt, an actual tensor that updates every turn and is auditable at `/dashboard`.
 
-Mindees carries **nineteen persistent state loops** that adapt automatically from how you talk — you configure none of them, you just chat:
+Mindees carries **twenty persistent state loops** that adapt automatically from how you talk — you configure none of them, you just chat:
 
 | Loop | Shape | What it tracks | When it updates |
 |---|---|---|---|
@@ -118,6 +118,8 @@ Mindees carries **nineteen persistent state loops** that adapt automatically fro
 | **Conversation rhythm** | scalar | the user's pace — burst / fast / steady / slow / thoughtful — from EMA of inter-message gaps | Per-thread, every user message |
 | **Inner voice** | rolling 20 | private first-person stream of observations Mindees makes about the turn — "they're frustrated, don't pile on" — composed deterministically from the other tensors at zero LLM cost | Per-thread, every turn |
 | **Topic affinity** | { topic → -1..+1 } | which subjects light THIS user up vs. close them off — derived from reply-length deltas and affect cues on the FOLLOWING turn | Per-user, every turn — slow EMA |
+| **Reach-out** | string | a pre-composed "what to say when they come back after a gap" — corrections, self-curiosity finding, top affinity, or journal line | Composed by cron, surfaced after ≥6h gaps |
+| **Neural affect** | 7-class | transformers.js emotion model (Xenova/emotion-english-distilroberta-base) blended into the 8-dim cues | Per turn, parallel to rule-based read, 2.5s timeout fallback |
 
 Plus an **auto-research loop**: when Mindees hedges ("I don't know", "let me check") or hits a high-novelty question with no web-search this turn, it fires a Tavily search in the background, persists the passages as recallable memories. Next time you ask about the same area, the prior research surfaces in the system prompt. This is **per-turn self-machine-learning** — separate from the 5-minute cron.
 
@@ -146,15 +148,42 @@ The whole self-improvement-loop narrative depends on the user being able to veri
 
 ### Autonomous research (zero-key fallback)
 
-The cron tick doesn't just train the model — it researches the topics the user has been most uncertain about. Provider rotation:
+The cron tick doesn't just train the model — it researches both the topics the user has been uncertain about AND the topics Mindees itself is curious about (when `mood.curiosity ≥ 0.65`). Provider rotation:
 
 1. **Tavily** *(paid, best general web — when key present)*
 2. **Exa** *(paid, semantic search — when key present)*
-3. **DuckDuckGo HTML** *(FREE, no key — always available)*
-4. **Wikipedia REST** *(FREE, no key — always available)*
-5. **arXiv** *(FREE, academic queries)*
+3. **JINA** *(s.jina.ai — FREE tier, better with key — semantic markdown summaries)*
+4. **DuckDuckGo HTML** *(FREE, no key — always available)*
+5. **Wikipedia REST** *(FREE, no key — always available)*
+6. **arXiv** *(FREE, no key — academic queries via `searchAcademic()`)*
+7. **Reddit JSON** *(FREE, no key — real-human conversations via `searchSocial()`)*
+8. **HackerNews Algolia** *(FREE, no key — tech-flavoured discussion via `searchSocial()`)*
 
-You can deploy Mindees with **zero API keys** and the autonomous-research loop still works — DuckDuckGo + Wikipedia + arXiv give Mindees real internet research without spending a cent. Add Tavily/Exa keys for higher-quality general-web results.
+You can deploy Mindees with **zero API keys** and every autonomous-research path still works — JINA (key-less tier) + DuckDuckGo + Wikipedia + arXiv + Reddit + HackerNews give Mindees real internet research, real-human discussion, and academic depth without spending a cent. Add Tavily/Exa keys for higher-quality general-web results.
+
+### The full self-learning feedback loop
+
+```
+chat turn  →  data/distill-corpus.jsonl  →  Vercel Blob
+                            │
+              ┌─────────────┴─────────────┐
+              ▼                           ▼
+     5-min cron tick                weekly GH Action
+     (online TS-side                (Python pretrain.py
+      gradient step via              with MixedSampler,
+      selfImproveTick)               completion-only loss,
+              │                       persona-loss term)
+              ▼                           ▼
+     LoRA-style update          checkpoints/base.bin
+              │                           │
+              └─────────────┬─────────────┘
+                            ▼
+                  next request hydrates new weights
+                            ▼
+                  smarter chat turn (loop continues)
+```
+
+Every five minutes the live conversation corpus feeds a gradient update; every weekly run the same corpus feeds a full-blown pretrain alongside `daily_dialog` (or any HF dialogue dataset you point it at). The user just chats — the model gets measurably better.
 
 ---
 
