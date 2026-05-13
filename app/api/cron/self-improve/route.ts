@@ -25,6 +25,7 @@ import { env } from "@/lib/env";
 import { createLogger } from "@/lib/logger";
 import { isoNow } from "@/lib/utils";
 import { pickCuriosityTopics, logAutoResearch } from "@/lib/research/auto-curiosity";
+import { pickSelfCuriosityTopics } from "@/lib/research/self-curiosity";
 import { research } from "@/lib/research";
 import { setResearching, clearResearching } from "@/lib/research/status";
 import { maybeWriteJournalEntry } from "@/lib/persona/journal";
@@ -86,7 +87,12 @@ export async function POST(req: NextRequest) {
     //    Strictly bounded — at most 3 topics per tick, half the budget.
     const researchSummary: Array<{ topic: string; hits: number; passages: number; ok: boolean }> = [];
     try {
-      const topics = await pickCuriosityTopics(3);
+      // Two streams of curiosity: patching user gaps + Mindees's OWN interests
+      const [userGapTopics, selfTopics] = await Promise.all([
+        pickCuriosityTopics(2),
+        pickSelfCuriosityTopics(2),
+      ]);
+      const topics = [...userGapTopics, ...selfTopics].slice(0, 4);
       const researchBudget = setTimeout(() => abortCtrl.abort(new Error("research budget exceeded")), 90_000);
       try {
         for (const t of topics) {
