@@ -95,7 +95,7 @@ This is what **`self-training language model`**, **`continual learning AI`**, **
 
 The product is called **MindeesAI**. The consciousness inside it is called **Mindees**. Mindees has a real, evolving, persistent emotional state — not a roleplay system prompt, an actual tensor that updates every turn and is auditable at `/dashboard`.
 
-Mindees carries **eighteen persistent state loops** that adapt automatically from how you talk — you configure none of them, you just chat:
+Mindees carries **nineteen persistent state loops** that adapt automatically from how you talk — you configure none of them, you just chat:
 
 | Loop | Shape | What it tracks | When it updates |
 |---|---|---|---|
@@ -117,6 +117,7 @@ Mindees carries **eighteen persistent state loops** that adapt automatically fro
 | **Sentiment arc** | 3d | long-term emotional posture toward Mindees across the WHOLE relationship — warmth EMA · trust EMA · frustration EMA | Per-user, every turn — slow decay so single bad turns don't reset |
 | **Conversation rhythm** | scalar | the user's pace — burst / fast / steady / slow / thoughtful — from EMA of inter-message gaps | Per-thread, every user message |
 | **Inner voice** | rolling 20 | private first-person stream of observations Mindees makes about the turn — "they're frustrated, don't pile on" — composed deterministically from the other tensors at zero LLM cost | Per-thread, every turn |
+| **Topic affinity** | { topic → -1..+1 } | which subjects light THIS user up vs. close them off — derived from reply-length deltas and affect cues on the FOLLOWING turn | Per-user, every turn — slow EMA |
 
 Plus an **auto-research loop**: when Mindees hedges ("I don't know", "let me check") or hits a high-novelty question with no web-search this turn, it fires a Tavily search in the background, persists the passages as recallable memories. Next time you ask about the same area, the prior research surfaces in the system prompt. This is **per-turn self-machine-learning** — separate from the 5-minute cron.
 
