@@ -25,6 +25,7 @@ import { persistPersonaQuick } from "@/lib/memory/persistence";
 import { appendDistillRow } from "@/lib/memory/distill-corpus";
 import { studyTopic } from "@/lib/persona/skill-mastery";
 import { touchMeta, getMeta } from "@/lib/threads/metadata";
+import { getSummary, maybeUpdateSummary } from "@/lib/threads/summary";
 import { generateThreadTitle } from "@/lib/threads/title";
 import {
   readAffect,
