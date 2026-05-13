@@ -31,9 +31,10 @@ export function Nav() {
 
         <div className="hidden md:flex items-center gap-8 text-sm text-bone-300">
           <NavLink href="/#how">How</NavLink>
-          <NavLink href="/#specs">Specs</NavLink>
           <NavLink href="/#features">Features</NavLink>
           <NavLink href="/dashboard">Dashboard</NavLink>
+          <NavLink href="/journal">Journal</NavLink>
+          <NavLink href="/memory-graph">Graph</NavLink>
         </div>
 
         <Link href="/chat" className="btn btn-ghost text-sm">

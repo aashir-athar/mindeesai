@@ -25,7 +25,7 @@ on:
       variant:
         description: 'Model variant (nano | small)'
         required: false
-        default: 'nano'
+        default: 'small'
         type: choice
         options: [nano, small]
       steps:
@@ -90,9 +90,9 @@ jobs:
       - name: Pretrain
         env:
           PYTORCH_ENABLE_MPS_FALLBACK: '1'
-          MIND_VARIANT: ${{ github.event.inputs.variant || 'nano' }}
+          MIND_VARIANT: ${{ github.event.inputs.variant || 'small' }}
         run: |
-          VARIANT="${{ github.event.inputs.variant || 'nano' }}"
+          VARIANT="${{ github.event.inputs.variant || 'small' }}"
           STEPS="${{ github.event.inputs.steps || '2000' }}"
           BATCH="${{ github.event.inputs.batch || '4' }}"
           mkdir -p checkpoints data

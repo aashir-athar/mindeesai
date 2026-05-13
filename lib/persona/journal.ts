@@ -161,4 +161,19 @@ export async function lastJournalEntry(): Promise<JournalEntry | null> {
   }
 }
 
+/** Read the last N journal entries (newest first). */
+export async function recentJournalEntries(limit = 30): Promise<JournalEntry[]> {
+  try {
+    const raw = await readFile(JOURNAL_FILE, "utf8");
+    const lines = raw.split("\n").filter(Boolean);
+    const parsed: JournalEntry[] = [];
+    for (const line of lines.slice(-limit * 2)) {
+      try { parsed.push(JSON.parse(line) as JournalEntry); } catch { /* skip */ }
+    }
+    return parsed.slice(-limit).reverse();
+  } catch {
+    return [];
+  }
+}
+
 void readdir;

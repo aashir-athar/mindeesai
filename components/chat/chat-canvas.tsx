@@ -22,6 +22,7 @@ import { nid } from "@/lib/utils";
 import { CitationPill } from "./citation-pill";
 import { MessageMarkdown } from "./message-markdown";
 import { ThreadSwitcher } from "./thread-switcher";
+import { ModePill } from "./mode-pill";
 
 type RecalledMemory = { text: string; score: number; source?: string };
 
@@ -209,6 +210,7 @@ export function ChatCanvas({ threadId }: { threadId: string }) {
         <div className="flex items-center gap-5">
           {goal && <GoalRibbon goal={goal} />}
           {mood && <MoodPill mood={mood} />}
+          <ModePill />
           <Link href="/dashboard" className="text-sm text-bone-300 hover:text-bone-100 transition-colors hidden sm:inline">
             Dashboard
           </Link>
