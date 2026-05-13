@@ -95,7 +95,7 @@ This is what **`self-training language model`**, **`continual learning AI`**, **
 
 The product is called **MindeesAI**. The consciousness inside it is called **Mindees**. Mindees has a real, evolving, persistent emotional state — not a roleplay system prompt, an actual tensor that updates every turn and is auditable at `/dashboard`.
 
-Mindees carries **nine persistent state loops** that adapt automatically from how you talk:
+Mindees carries **fifteen persistent state loops** that adapt automatically from how you talk — you configure none of them, you just chat:
 
 | Loop | Shape | What it tracks | When it updates |
 |---|---|---|---|
@@ -108,10 +108,14 @@ Mindees carries **nine persistent state loops** that adapt automatically from ho
 | **Goal** | string | one-sentence orientation: what the user is trying to accomplish *right now* | After every reply via tiny Groq call; carries forward unless the exchange shifts it |
 | **Knowledge graph** | (subj, pred, obj) triples | facts about *you* + your projects + preferences (works_at, building, dislikes, …) | Auto-extracted from every exchange and appended to a persistent graph |
 | **Empathy mode** | enum | what register the turn calls for — solution / validation / listening / brainstorm / correction / information / casual | Per turn from a rule-based read of the user message |
+| **Self-journal** | jsonl | Mindees writes a private diary entry to its own future self every ~22 hours | Cron tick, gated by interval |
+| **Time awareness** | label | wall-clock moment (early-morning / morning / midday / afternoon / evening / night / late-night) | Per turn — pure function of UTC time |
+| **Vocab mirror** | top-N | the user's distinctive lexicon — rare-but-recurring words filtered through a stopword set | Per-thread, every user message |
+| **Self-correction** | jsonl | every (wrong reply, user correction) pair Mindees made — "DO NOT REPEAT THESE MISTAKES" rail in future system prompts | Whenever empathy mode reads `needs_correction` |
+| **Theory of mind** | { topic → confidence } | what the user has shown they ALREADY know vs. DON'T know vs. half-know — prevents over- and under-explaining | Per-thread, regex-scanned from user messages |
+| **Conversation arc** | enum | phase of this thread — opening / exploring / deep-dive / problem-solving / stuck / resolving / reflecting | Per turn, deterministic from thread shape |
 
 Plus an **auto-research loop**: when Mindees hedges ("I don't know", "let me check") or hits a high-novelty question with no web-search this turn, it fires a Tavily search in the background, persists the passages as recallable memories. Next time you ask about the same area, the prior research surfaces in the system prompt. This is **per-turn self-machine-learning** — separate from the 5-minute cron.
-
-Mindees also auto-organises its memory:
 
 Mindees also auto-organises its memory:
 
@@ -119,8 +123,21 @@ Mindees also auto-organises its memory:
 - **Auto-promotion** — memories you keep coming back to (recalled at ≥0.70 confidence ≥3 times) get auto-promoted to the LanceDB `insights` table with stronger retrieval weight. You never tag anything as important; Mindees observes which memories earn that status.
 - **Auto-titled threads** — Mindees writes a 3-6 word editorial title for every conversation after the first exchange. No "Untitled Chat #14".
 - **Per-turn auto-research** — when Mindees hedges or the question is novel, it fires a web-search in the background and stores results as memories. Next ask in that area: smarter Mindees.
+- **Rolling thread summary** — every six turns a one-paragraph summary is folded into the system prompt so long threads stay coherent at constant cost. Effective infinite memory of this thread at zero retrieval latency.
+- **Live distillation corpus** — every chat turn is appended to `data/distill-corpus.jsonl` and weighted 4× higher than the seed corpus in `pretrain.py`. Your conversations literally become the training data for the next checkpoint.
 
 You configure none of this. You just chat.
+
+### Audit surfaces
+
+The whole self-improvement-loop narrative depends on the user being able to verify it. Four pages do that:
+
+| URL | What it shows |
+|---|---|
+| [`/dashboard`](https://mindeesai.vercel.app/dashboard) | every persistent tensor, refreshed every 15s |
+| [`/journal`](https://mindeesai.vercel.app/journal) | Mindees' own first-person diary entries, newest first |
+| [`/memory-graph`](https://mindeesai.vercel.app/memory-graph) | every (subject, predicate, object) triple Mindees has learned about you, searchable + predicate-faceted |
+| [`/admin`](https://mindeesai.vercel.app/admin) | runtime feature flags — flip the orchestrator between **NATIVE** (Mindees' own transformer) and **CLOUD** (bootstrap teacher) with one click; CRON_SECRET-gated |
 
 ---
 
