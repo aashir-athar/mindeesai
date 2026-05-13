@@ -29,11 +29,13 @@ import { recentCorrections } from "@/lib/persona/self-correction";
 import { readInnerThoughts } from "@/lib/persona/inner-voice";
 import { readAffinities } from "@/lib/persona/topic-affinity";
 import { lastJournalEntry } from "@/lib/persona/journal";
+import { ensureLanceDBReady } from "@/lib/memory/persistence";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
+  await ensureLanceDBReady().catch(() => {});
   const threadId = req.nextUrl.searchParams.get("threadId") ?? "default";
 
   const [mood, userModel, relationship, reward, drift, sentimentArc, beliefs, vocabSig, corrections, innerThoughts, affinities, journal] = await Promise.all([

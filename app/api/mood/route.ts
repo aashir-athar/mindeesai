@@ -8,11 +8,13 @@
 
 import { NextResponse } from "next/server";
 import { getMood } from "@/lib/persona";
+import { ensureLanceDBReady } from "@/lib/memory/persistence";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET() {
+  await ensureLanceDBReady().catch(() => {});
   const mood = await getMood();
   return NextResponse.json({ ok: true, mood });
 }

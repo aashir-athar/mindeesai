@@ -10,11 +10,13 @@
 
 import { NextResponse } from "next/server";
 import { allTriples } from "@/lib/memory/graph";
+import { ensureLanceDBReady } from "@/lib/memory/persistence";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET() {
+  await ensureLanceDBReady().catch(() => {});
   const triples = await allTriples();
   // Most recent first
   const sorted = [...triples].sort((a, b) => {

@@ -34,7 +34,24 @@ export const env = {
   JINA_API_KEY: str("JINA_API_KEY"),
 
   LANCEDB_PATH: str("LANCEDB_PATH", "./data/lancedb")!,
-  MEMORY_PERSISTENCE: str("MEMORY_PERSISTENCE", "local")! as
+  /**
+   * Auto-detected:
+   *   - If MEMORY_PERSISTENCE is explicitly set, honour it.
+   *   - Else, if BLOB_READ_WRITE_TOKEN is present AND we're on Vercel,
+   *     default to "vercel-blob" — the only mode that actually persists
+   *     between serverless function invocations on Vercel.
+   *   - Else fall back to "local" (dev / self-hosted).
+   *
+   * The user's directive is "no configuration needed; user just chats."
+   * Requiring them to manually set MEMORY_PERSISTENCE=vercel-blob in
+   * addition to providing the Blob token violated that — and silently
+   * broke every audit page (journal/research/memory-graph showed empty
+   * because /tmp resets per function invocation).
+   */
+  MEMORY_PERSISTENCE: (str("MEMORY_PERSISTENCE")
+    ?? ((process.env.BLOB_READ_WRITE_TOKEN && process.env.VERCEL === "1")
+        ? "vercel-blob"
+        : "local")) as
     | "local"
     | "vercel-blob"
     | "turso"

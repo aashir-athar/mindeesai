@@ -7,11 +7,13 @@
 
 import { NextResponse } from "next/server";
 import { readAutoResearchLog } from "@/lib/research/auto-curiosity";
+import { ensureLanceDBReady } from "@/lib/memory/persistence";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
+  await ensureLanceDBReady().catch(() => {});
   const url = new URL(req.url);
   const limitParam = url.searchParams.get("limit");
   const limit = Math.min(200, Math.max(1, Number(limitParam) || 50));

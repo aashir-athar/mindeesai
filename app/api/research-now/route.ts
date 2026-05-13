@@ -8,11 +8,13 @@
 
 import { NextResponse } from "next/server";
 import { getResearching } from "@/lib/research/status";
+import { ensureLanceDBReady } from "@/lib/memory/persistence";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET() {
+  await ensureLanceDBReady().catch(() => {});
   const beacon = await getResearching();
   return NextResponse.json({ ok: true, researching: beacon });
 }
