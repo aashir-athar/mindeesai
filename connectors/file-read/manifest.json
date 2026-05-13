@@ -1,0 +1,14 @@
+{
+  "name": "file-read",
+  "version": "1.0.0",
+  "description": "Read a small text file from the project's data/ directory. Use this when the user references something already saved locally.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "path": { "type": "string", "description": "Path relative to data/ — e.g. 'reflections/2026-05-13.jsonl'" }
+    },
+    "required": ["path"]
+  },
+  "permissions": ["filesystem-read"],
+  "author": "aashir-athar"
+}

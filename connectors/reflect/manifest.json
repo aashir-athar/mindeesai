@@ -1,0 +1,13 @@
+{
+  "name": "reflect",
+  "version": "1.0.0",
+  "description": "Pause and reflect on the conversation so far. Use this when the user asks you to think harder, or when you're about to give a low-confidence answer and want to slow down.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "focus": { "type": "string", "description": "What aspect of the conversation to reflect on. Optional — defaults to 'overall accuracy and tone'." }
+    }
+  },
+  "permissions": [],
+  "author": "aashir-athar"
+}

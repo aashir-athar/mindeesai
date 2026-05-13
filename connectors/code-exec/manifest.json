@@ -1,0 +1,14 @@
+{
+  "name": "code-exec",
+  "version": "1.0.0",
+  "description": "Execute a small snippet of JavaScript in a sandboxed VM (no filesystem, no network, no globals). Use for deterministic computation that the calculator can't handle.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "code": { "type": "string", "description": "JavaScript source. Must return a value via the last expression (REPL-style)." }
+    },
+    "required": ["code"]
+  },
+  "permissions": [],
+  "author": "aashir-athar"
+}

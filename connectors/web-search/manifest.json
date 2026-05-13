@@ -1,0 +1,15 @@
+{
+  "name": "web-search",
+  "version": "1.0.0",
+  "description": "Search the web with Tavily (fallback Exa) and return ranked passages with citations. Use this for any time-sensitive question.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "query": { "type": "string", "description": "Search query in natural language." },
+      "depth": { "type": "string", "enum": ["quick", "deep"], "default": "deep", "description": "quick = headlines only; deep = crawl top results" }
+    },
+    "required": ["query"]
+  },
+  "permissions": ["network", "secrets:TAVILY_API_KEY", "secrets:EXA_API_KEY", "secrets:FIRECRAWL_API_KEY", "secrets:JINA_API_KEY"],
+  "author": "aashir-athar"
+}

@@ -1,0 +1,14 @@
+{
+  "name": "web-crawl",
+  "version": "1.0.0",
+  "description": "Fetch and extract clean readable text from a single URL. Use when the user provides a link or when you need the full body of a page (web-search returns snippets only).",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "url": { "type": "string", "description": "Absolute URL to fetch." }
+    },
+    "required": ["url"]
+  },
+  "permissions": ["network", "secrets:FIRECRAWL_API_KEY", "secrets:JINA_API_KEY"],
+  "author": "aashir-athar"
+}

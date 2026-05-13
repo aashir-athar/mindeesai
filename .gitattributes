@@ -1,0 +1,33 @@
+# Auto-detect text files and perform LF normalization
+* text=auto eol=lf
+
+# Force LF for everything text-y so Windows contributors don't pollute diffs
+*.ts        text eol=lf
+*.tsx       text eol=lf
+*.js        text eol=lf
+*.mjs       text eol=lf
+*.json      text eol=lf
+*.md        text eol=lf
+*.css       text eol=lf
+*.html      text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+*.toml      text eol=lf
+*.py        text eol=lf
+*.sh        text eol=lf
+*.svg       text eol=lf
+
+# Binary files — never touch
+*.png       binary
+*.jpg       binary
+*.jpeg      binary
+*.webp      binary
+*.avif      binary
+*.ico       binary
+*.bin       binary
+*.zip       binary
+
+# GitHub linguist hints — keep auto-detection honest
+core/mindees-mind/**/*.ts  linguist-detectable=true
+docs/**                    linguist-documentation=true
+scripts/train/**/*.py      linguist-language=Python

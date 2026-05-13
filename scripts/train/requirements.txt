@@ -1,0 +1,7 @@
+torch>=2.5
+numpy>=1.26
+tqdm>=4.66
+datasets>=2.20
+sentencepiece>=0.2
+anthropic>=0.40
+openai>=1.40

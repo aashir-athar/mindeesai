@@ -1,0 +1,22 @@
+# Don't ship runtime data — Vercel functions write to /tmp at runtime
+data/
+checkpoints/*.bin
+.next/cache
+
+# Don't ship Python training scripts to the serverless bundle
+scripts/train/
+
+# Don't ship local secrets
+.env*.local
+.env.production
+
+# Don't ship dev artifacts
+*.log
+.pnpm-store
+node_modules/.cache
+tests/
+coverage/
+
+# OS junk
+.DS_Store
+Thumbs.db
