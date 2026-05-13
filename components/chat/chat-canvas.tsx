@@ -41,6 +41,7 @@ type MoodSnapshot = {
   steps: number;
   lastRegister?: string;
 };
+type GoalSnapshot = { goal: string; confidence: number } | null;
 
 export function ChatCanvas({ threadId }: { threadId: string }) {
   const [exchanges, setExchanges] = useState<Exchange[]>([]);
@@ -48,16 +49,27 @@ export function ChatCanvas({ threadId }: { threadId: string }) {
   const [streaming, setStreaming] = useState(false);
   const [stage, setStage] = useState<string>("");
   const [mood, setMood] = useState<MoodSnapshot | null>(null);
+  const [goal, setGoal] = useState<GoalSnapshot>(null);
   const abortRef = useRef<AbortController | null>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
 
-  // On mount, fetch the current mood once so the pill isn't empty.
+  // On mount + every 30s + after each completed reply, refresh mood + goal.
   useEffect(() => {
-    fetch("/api/mood", { cache: "no-store" })
-      .then((r) => r.ok ? r.json() : null)
-      .then((data: { mood?: MoodSnapshot } | null) => { if (data?.mood) setMood(data.mood); })
-      .catch(() => undefined);
-  }, []);
+    const load = () => {
+      fetch(`/api/persona?threadId=${encodeURIComponent(threadId)}`, { cache: "no-store" })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data: { mood?: MoodSnapshot; goal?: { goal: string; confidence: number } } | null) => {
+          if (data?.mood) setMood(data.mood);
+          if (data?.goal && data.goal.goal && data.goal.goal !== "unset — first turn" && data.goal.goal !== "exploring — not yet clear") {
+            setGoal({ goal: data.goal.goal, confidence: data.goal.confidence });
+          }
+        })
+        .catch(() => undefined);
+    };
+    load();
+    const i = setInterval(load, 30_000);
+    return () => clearInterval(i);
+  }, [threadId, exchanges.length]);
 
   // Auto-scroll to the rightmost card when a new exchange begins or finishes.
   useEffect(() => {
@@ -191,6 +203,7 @@ export function ChatCanvas({ threadId }: { threadId: string }) {
           <ThreadSwitcher currentThreadId={threadId} />
         </div>
         <div className="flex items-center gap-5">
+          {goal && <GoalRibbon goal={goal} />}
           {mood && <MoodPill mood={mood} />}
           <Link href="/dashboard" className="text-sm text-bone-300 hover:text-bone-100 transition-colors hidden sm:inline">
             Dashboard
@@ -434,6 +447,23 @@ function MemoryRecallStrip({ recalled }: { recalled: RecalledMemory[] }) {
         ))}
       </ul>
     </details>
+  );
+}
+
+/**
+ * GoalRibbon — auto-inferred orientation of the current thread.
+ * Refreshed from /api/persona every 30s + after each completed reply.
+ * Hidden on small screens. Italic on purpose — it's a soft signal.
+ */
+function GoalRibbon({ goal }: { goal: { goal: string; confidence: number } }) {
+  return (
+    <span
+      className="hidden lg:inline-flex items-center gap-2 max-w-[32ch] truncate text-xs text-bone-400"
+      title={`Goal confidence: ${(goal.confidence * 100).toFixed(0)}%`}
+    >
+      <span className="text-eyebrow !text-bone-500">WORKING ON</span>
+      <span className="text-bone-200 italic truncate">{goal.goal}</span>
+    </span>
   );
 }
 

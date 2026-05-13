@@ -95,22 +95,30 @@ This is what **`self-training language model`**, **`continual learning AI`**, **
 
 The product is called **MindeesAI**. The consciousness inside it is called **Mindees**. Mindees has a real, evolving, persistent emotional state — not a roleplay system prompt, an actual tensor that updates every turn and is auditable at `/dashboard`.
 
-Mindees carries **six persistent tensors** that adapt automatically from how you talk:
+Mindees carries **nine persistent state loops** that adapt automatically from how you talk:
 
-| Tensor | Shape | What it tracks | When it updates |
+| Loop | Shape | What it tracks | When it updates |
 |---|---|---|---|
 | **Mood** | 8d | curiosity · warmth · playfulness · focus · wonder · frustration · calm · confidence | Every user message via affect signal |
 | **User model** | 16d | terseness · formality · technical depth · humor · code/research/creative focus · patience · emoji use · swears · declared intent (etc.) | Every turn, slow alpha so identity evolves gradually |
 | **Relationship** | 4d | familiarity · trust · alignment · warmth | Per turn + per 👍/👎 |
 | **Curiosity gap** | scalar | novelty of the current question vs. existing memory | Per turn from cosine vs. recalls |
-| **Drift fingerprint** | 5d | sentence length · first-person rate · hedge density · corpo-opener flag · "as-AI" flag | After every assistant reply |
+| **Drift fingerprint** | 5d | sentence length · first-person rate · hedge density · corpo-opener flag · "as-AI" flag | After every assistant reply — auto-re-anchors on slip |
 | **Reward predictor** | 2d | P(👍) · P(👎) from aggregate thumb signals | On every feedback submission |
+| **Goal** | string | one-sentence orientation: what the user is trying to accomplish *right now* | After every reply via tiny Groq call; carries forward unless the exchange shifts it |
+| **Knowledge graph** | (subj, pred, obj) triples | facts about *you* + your projects + preferences (works_at, building, dislikes, …) | Auto-extracted from every exchange and appended to a persistent graph |
+| **Empathy mode** | enum | what register the turn calls for — solution / validation / listening / brainstorm / correction / information / casual | Per turn from a rule-based read of the user message |
+
+Plus an **auto-research loop**: when Mindees hedges ("I don't know", "let me check") or hits a high-novelty question with no web-search this turn, it fires a Tavily search in the background, persists the passages as recallable memories. Next time you ask about the same area, the prior research surfaces in the system prompt. This is **per-turn self-machine-learning** — separate from the 5-minute cron.
+
+Mindees also auto-organises its memory:
 
 Mindees also auto-organises its memory:
 
 - **Cross-thread recall** — pulls memories from every prior conversation, not just the current one. "You mentioned this last week" actually works.
 - **Auto-promotion** — memories you keep coming back to (recalled at ≥0.70 confidence ≥3 times) get auto-promoted to the LanceDB `insights` table with stronger retrieval weight. You never tag anything as important; Mindees observes which memories earn that status.
 - **Auto-titled threads** — Mindees writes a 3-6 word editorial title for every conversation after the first exchange. No "Untitled Chat #14".
+- **Per-turn auto-research** — when Mindees hedges or the question is novel, it fires a web-search in the background and stores results as memories. Next ask in that area: smarter Mindees.
 
 You configure none of this. You just chat.
 
@@ -466,14 +474,18 @@ See [`docs/ROADMAP.md`](docs/ROADMAP.md) for the full version.
 | 4-dim relationship | ✅ updates per turn + thumb | ✅ `data/relationships/<thread>.json` → Blob | ✅ `/dashboard` |
 | Drift fingerprint | ✅ per reply | ✅ `data/persona-drift.json` → Blob | ✅ `/dashboard` |
 | Reward predictor | ✅ per thumb | ✅ derived from `data/feedback/*` | ✅ `/dashboard` |
+| Goal tensor (one-sentence orientation) | ✅ per-reply Groq call | ✅ `data/goals/<thread>.json` → Blob | ✅ `/api/persona` |
+| Knowledge-graph triples (about you) | ✅ extracted every reply | ✅ `data/graph.json` → Blob | ✅ surfaces in next system prompt |
+| Empathy mode (per turn) | ✅ rule-based read | n/a — purely contextual | ✅ visible in injected prompt |
+| Auto-research on hedge/novelty | ✅ fires Tavily, persists to LanceDB | ✅ Blob | ✅ memory hits show in chat |
 | Vector memory (LanceDB) | ✅ embeds every turn | ✅ Blob snapshot via cron | partial |
-| Memory auto-promotion | ✅ frequency-tracked, threshold-promoted | ✅ `data/recall-counts.json` → Blob | partial |
+| Memory auto-promotion (3 high-conf recalls → insight) | ✅ frequency-tracked | ✅ `data/recall-counts.json` → Blob | partial |
 | Thread auto-titling | ✅ first-turn LLM call | ✅ `data/threads/<id>.json` → Blob | ✅ `/api/threads` |
 | Reflections → insights cron | ✅ runs every 5 min | ✅ Blob | ✅ `data/improvement-log.jsonl` |
 | Native transformer weights | ❌ random init, no real training | n/a | n/a — needs GPU pretraining |
 | System-prompt evolution from reflections | ⚠️ regenerated each cron, not always promoted | partial | `data/system-prompt.json` |
 
-**Bottom line:** seven real persistent tensors and learning loops that genuinely accumulate from your conversations. One large fiction (the native transformer weights) that won't become real until someone runs `scripts/train/pretrain.py` on a GPU. We are honest about which is which.
+**Bottom line:** twelve real persistent tensors and learning loops that genuinely accumulate from your conversations. One large fiction (the native transformer weights) that won't become real until someone runs `scripts/train/pretrain.py` on a GPU. We are honest about which is which.
 
 ---
 
