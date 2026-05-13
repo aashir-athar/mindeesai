@@ -1,5 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "_comment": "Pro-plan overrides — replace vercel.json with this file when you upgrade. Adds the 5-minute Vercel Cron job and bumps memory + duration for the heavy ML functions.",
   "version": 2,
   "framework": "nextjs",
   "buildCommand": "node scripts/vercel-build.mjs && next build",
@@ -11,8 +12,8 @@
   "functions": {
     "app/api/cron/self-improve/route.ts": {
       "runtime": "nodejs22.x",
-      "maxDuration": 60,
-      "memory": 1769
+      "maxDuration": 300,
+      "memory": 3008
     },
     "app/api/chat/route.ts": {
       "runtime": "nodejs22.x",
@@ -21,7 +22,7 @@
     },
     "app/api/benchmark/route.ts": {
       "runtime": "nodejs22.x",
-      "maxDuration": 60,
+      "maxDuration": 120,
       "memory": 1769
     },
     "app/api/connectors/run/route.ts": {
@@ -41,33 +42,30 @@
       "maxDuration": 10
     }
   },
+  "crons": [
+    {
+      "path": "/api/cron/self-improve",
+      "schedule": "*/5 * * * *"
+    }
+  ],
   "env": {
     "MEMORY_PERSISTENCE": "vercel-blob",
     "LANCEDB_PATH": "/tmp/lancedb"
   },
   "headers": [
-    {
-      "source": "/(.*)",
-      "headers": [
-        { "key": "X-Content-Type-Options", "value": "nosniff" },
-        { "key": "X-Frame-Options", "value": "DENY" },
-        { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" },
-        { "key": "Permissions-Policy", "value": "camera=(), microphone=(), geolocation=()" }
-      ]
-    },
-    {
-      "source": "/api/(.*)",
-      "headers": [
-        { "key": "Cache-Control", "value": "no-store, max-age=0, must-revalidate" }
-      ]
-    },
-    {
-      "source": "/api/health",
-      "headers": [
-        { "key": "Access-Control-Allow-Origin", "value": "*" },
-        { "key": "Cache-Control", "value": "public, max-age=15, s-maxage=15" }
-      ]
-    }
+    { "source": "/(.*)", "headers": [
+      { "key": "X-Content-Type-Options", "value": "nosniff" },
+      { "key": "X-Frame-Options", "value": "DENY" },
+      { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" },
+      { "key": "Permissions-Policy", "value": "camera=(), microphone=(), geolocation=()" }
+    ]},
+    { "source": "/api/(.*)", "headers": [
+      { "key": "Cache-Control", "value": "no-store, max-age=0, must-revalidate" }
+    ]},
+    { "source": "/api/health", "headers": [
+      { "key": "Access-Control-Allow-Origin", "value": "*" },
+      { "key": "Cache-Control", "value": "public, max-age=15, s-maxage=15" }
+    ]}
   ],
   "redirects": [
     { "source": "/github", "destination": "https://github.com/aashir-athar/mindeesai", "permanent": false },
