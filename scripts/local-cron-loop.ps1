@@ -14,7 +14,12 @@
 param(
     [int]$IntervalMin = 5,
     [int]$Port = 3000,
-    [string]$EnvFile = ".env.local"
+    [string]$EnvFile = ".env.local",
+    # 30 minutes — first tick is slow (model init + Groq rate-limit
+    # fallback walks + first-time ONNX downloads can total several
+    # minutes). Subsequent ticks finish in 10-60 sec. Bump higher with
+    # -TimeoutMin if you see "operation has timed out" errors.
+    [int]$TimeoutMin = 30
 )
 
 # If anything below blows up, we want the user to actually see WHY
@@ -49,6 +54,7 @@ try {
     Write-Host "--- Local cron loop ---" -ForegroundColor Cyan
     Write-Host "  endpoint: http://localhost:$Port/api/cron/self-improve"
     Write-Host "  interval: $IntervalMin minute(s)"
+    Write-Host "  timeout:  $TimeoutMin minute(s) per tick"
     Write-Host "  secret:   $($secret.Substring(0, [Math]::Min(6, $secret.Length)))... (loaded from $EnvFile)"
     Write-Host "  Ctrl+C to stop"
     Write-Host ""
@@ -60,7 +66,7 @@ try {
         Write-Host "[$ts] tick #$tickN -- firing... " -NoNewline -ForegroundColor DarkGray
         $sw = [System.Diagnostics.Stopwatch]::StartNew()
         try {
-            $resp = Invoke-RestMethod -Uri $url -Method Get -TimeoutSec 600
+            $resp = Invoke-RestMethod -Uri $url -Method Get -TimeoutSec ($TimeoutMin * 60)
             $sw.Stop()
             $elapsed = $sw.Elapsed.TotalSeconds.ToString('F1')
             $okSym  = if ($resp.ok) { "OK" } else { "FAIL" }
