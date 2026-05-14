@@ -97,17 +97,35 @@ export async function optimize(
     } catch (e) { log.warn("journal failed", e); }
   } else { skipped.push("journal"); }
 
-  // 5. Heavy training tick — many Groq calls + gradient steps. On Hobby
-  //    (60s ceiling) this almost always exceeds the remaining budget,
-  //    so we skip unless we have >30s left. The weekly GH Actions
-  //    pretrain workflow is the proper home for full training; this
-  //    5-min cron just keeps the lightweight loops alive.
+  // 5. Heavy training tick — DISABLED by default in the cron loop.
+  //
+  //    Why disabled: selfImproveTick runs gradient descent on the CPU
+  //    plus multiple LLM calls (curriculum + constitutional critique +
+  //    DPO + GRPO reward). On a rate-limited Groq day, each LLM call
+  //    walks the fallback chain (~2 min) and the gradient step doesn't
+  //    respect the abort signal mid-batch — so a single tick can hang
+  //    for 20+ minutes. The user's 30-minute client-side timeout was
+  //    hitting this on every tick.
+  //
+  //    Heavy training belongs in:
+  //      - scripts/train/run-home-max.ps1 (local GPU, ~3-4h)
+  //      - .github/workflows/pretrain.yml (free GH Actions CPU, ~30m, weekly)
+  //
+  //    The 5-minute cron loop just keeps the LIGHTWEIGHT loops alive:
+  //    reflection promotion, weight bumps, decay, idle-explore research,
+  //    journal entries, sleep-cycle consolidation, reach-out composition.
+  //
+  //    Set ENABLE_CRON_TRAINING=1 to opt back in (e.g. on a beefy
+  //    self-hosted runner where you actually want online training).
   let gradient = { loss: 0, tokens: 0, ms: 0 };
-  if (remaining() > 30_000) {
+  const cronTrainingEnabled = process.env.ENABLE_CRON_TRAINING === "1";
+  if (cronTrainingEnabled && remaining() > 60_000) {
     try {
       gradient = await selfImproveTick({ sinceMs: opts.sinceMs, signal: opts.signal });
     } catch (e) { log.error("selfImproveTick failed", e); }
-  } else { skipped.push("selfImproveTick"); }
+  } else {
+    skipped.push(cronTrainingEnabled ? "selfImproveTick (low budget)" : "selfImproveTick (disabled in cron; use pretrain workflow)");
+  }
 
   await appendLog({
     ranAt,

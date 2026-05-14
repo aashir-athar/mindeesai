@@ -61,6 +61,16 @@ export async function* streamOpenAICompatible(
   }
 
   const model = req.modelId ?? opts.defaultModel;
+  // Hard 15s timeout per provider — combined with the abort signal from
+  // the caller. Without this cap, a rate-limited provider can hang the
+  // whole fetch indefinitely (no default timeout in Node fetch), which
+  // cascades through the router's fallback chain and burns the cron's
+  // wall-clock budget.
+  const providerTimeout = AbortSignal.timeout(15_000);
+  const combinedSignal = req.signal
+    ? AbortSignal.any([req.signal, providerTimeout])
+    : providerTimeout;
+
   const res = await fetch(`${opts.baseUrl}/chat/completions`, {
     method: "POST",
     headers: {
@@ -82,7 +92,7 @@ export async function* streamOpenAICompatible(
         },
       })),
     }),
-    signal: req.signal,
+    signal: combinedSignal,
   });
 
   if (!res.ok || !res.body) {
