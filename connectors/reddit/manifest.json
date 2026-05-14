@@ -1,0 +1,15 @@
+{
+  "name": "reddit",
+  "version": "1.0.0",
+  "description": "Search Reddit for real-human discussion on any topic. Free, no key (Reddit's public JSON endpoint with a User-Agent). Use when the user wants to know what regular people are actually saying about a product, idea, decision, or place — instead of the encyclopedic answer.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "query": { "type": "string", "description": "Search terms." },
+      "subreddit": { "type": "string", "description": "Optional subreddit to scope the search (e.g. 'AskReddit', 'programming', 'pakistan')." }
+    },
+    "required": ["query"]
+  },
+  "permissions": ["network"],
+  "author": "aashir-athar"
+}

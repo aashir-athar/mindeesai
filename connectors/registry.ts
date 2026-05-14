@@ -64,6 +64,15 @@ import hackernewsManifest from "./hackernews/manifest.json";
 import arxivHandler from "./arxiv/handler";
 import arxivManifest from "./arxiv/manifest.json";
 
+import pubmedHandler from "./pubmed/handler";
+import pubmedManifest from "./pubmed/manifest.json";
+
+import redditHandler from "./reddit/handler";
+import redditManifest from "./reddit/manifest.json";
+
+import currencyHandler from "./currency/handler";
+import currencyManifest from "./currency/manifest.json";
+
 export interface RegisteredConnectorEntry {
   manifest: ConnectorManifest;
   handler: ConnectorHandler;
@@ -87,4 +96,8 @@ export const BUILT_IN_CONNECTORS: RegisteredConnectorEntry[] = [
   { manifest: dictionaryManifest as ConnectorManifest,    handler: dictionaryHandler as ConnectorHandler,    dir: "dictionary" },
   { manifest: hackernewsManifest as ConnectorManifest,    handler: hackernewsHandler as ConnectorHandler,    dir: "hackernews" },
   { manifest: arxivManifest as ConnectorManifest,         handler: arxivHandler as ConnectorHandler,         dir: "arxiv" },
+  // v0.3.1 — human-life essentials (health, real-talk, money)
+  { manifest: pubmedManifest as ConnectorManifest,        handler: pubmedHandler as ConnectorHandler,        dir: "pubmed" },
+  { manifest: redditManifest as ConnectorManifest,        handler: redditHandler as ConnectorHandler,        dir: "reddit" },
+  { manifest: currencyManifest as ConnectorManifest,      handler: currencyHandler as ConnectorHandler,      dir: "currency" },
 ];

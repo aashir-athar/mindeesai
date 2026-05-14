@@ -1,0 +1,14 @@
+{
+  "name": "pubmed",
+  "version": "1.0.0",
+  "description": "Search PubMed for medical/scientific peer-reviewed papers via the NCBI E-utilities API. Free, no key. Use when the user asks about health, medicine, biology, or 'what does research say about X'.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "query": { "type": "string", "description": "Search terms — disease, drug, biomarker, intervention, or author." }
+    },
+    "required": ["query"]
+  },
+  "permissions": ["network"],
+  "author": "aashir-athar"
+}

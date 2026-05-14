@@ -1,0 +1,16 @@
+{
+  "name": "currency",
+  "version": "1.0.0",
+  "description": "Convert between currencies using current exchange rates. Free via open.er-api.com (no key, ECB-sourced rates updated daily). Use when the user asks about prices in another currency, conversion, or international cost comparison.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "amount": { "type": "number", "description": "The amount to convert." },
+      "from": { "type": "string", "description": "Source currency code (e.g. 'USD', 'PKR', 'EUR'). Three-letter ISO 4217." },
+      "to": { "type": "string", "description": "Target currency code." }
+    },
+    "required": ["amount", "from", "to"]
+  },
+  "permissions": ["network"],
+  "author": "aashir-athar"
+}
