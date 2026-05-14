@@ -116,8 +116,35 @@ export async function* streamOpenAICompatible(
   let approxTokens = 0;
   const toolBuffers = new Map<number, { id: string; name: string; args: string }>();
 
+  // Per-CHUNK stall timeout. The fetch-level AbortSignal.timeout above only
+  // protects the handshake — once the stream opens, reader.read() blocks
+  // indefinitely if the server keeps the connection alive but never sends
+  // a chunk. That's the exact failure mode behind the "Composing Answer…
+  // stuck forever" bug: model returns 200 OK on a synthesis hop, then
+  // never streams a token (some safety classifier triggered, model
+  // overloaded, etc.). Race each read against a 25s timer; on stall, throw
+  // a typed ProviderError so the router walks to the next fallback model.
+  const CHUNK_STALL_MS = 25_000;
+
   while (true) {
-    const { done, value } = await reader.read();
+    let readResult: ReadableStreamReadResult<Uint8Array>;
+    try {
+      readResult = await Promise.race([
+        reader.read(),
+        new Promise<never>((_, rej) =>
+          setTimeout(() => rej(new Error("stream stalled — no chunk in 25s")), CHUNK_STALL_MS),
+        ),
+      ]);
+    } catch (e) {
+      // Cancel the underlying response so we don't leak the connection.
+      try { await reader.cancel(); } catch { /* ignore */ }
+      const err = new ProviderError(`${opts.label} stream stalled: ${(e as Error).message}`);
+      err.status = 504;
+      err.provider = opts.label;
+      err.isRateLimit = false;
+      throw err;
+    }
+    const { done, value } = readResult;
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
     const lines = buffer.split("\n");
