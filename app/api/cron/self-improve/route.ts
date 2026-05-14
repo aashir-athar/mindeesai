@@ -41,20 +41,53 @@ const log = createLogger("cron-self-improve");
 
 const FIVE_MIN_MS = 5 * 60 * 1000;
 
+async function authorize(req: NextRequest): Promise<{ ok: boolean; source: string }> {
+  if (!env.CRON_SECRET) return { ok: false, source: "no-secret-configured" };
+
+  // 1. Authorization: Bearer ... header (standard, preferred)
+  const auth = req.headers.get("authorization") ?? "";
+  if (auth === `Bearer ${env.CRON_SECRET}`) return { ok: true, source: "header" };
+
+  // 2. Vercel Cron's signed header
+  if ((req.headers.get("x-vercel-signature") ?? "").length > 0) {
+    return { ok: true, source: "vercel-cron" };
+  }
+
+  // 3. Query-parameter fallback — for services where setting a custom
+  //    Authorization header is awkward. Accepted keys: token, secret,
+  //    cron_secret. Slightly less secure (the secret CAN show up in
+  //    URL logs / cron-job.org history), but for single-user free-tier
+  //    convenience it's an acceptable tradeoff.
+  const url = new URL(req.url);
+  const queryToken =
+    url.searchParams.get("token") ||
+    url.searchParams.get("secret") ||
+    url.searchParams.get("cron_secret") || "";
+  if (queryToken && timingSafeEqual(queryToken, env.CRON_SECRET)) {
+    return { ok: true, source: "query" };
+  }
+
+  return { ok: false, source: "rejected" };
+}
+
+function timingSafeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) {
+    diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return diff === 0;
+}
+
 export async function POST(req: NextRequest) {
-  // Auth — accept EITHER:
-  //  - `Authorization: Bearer ${CRON_SECRET}`  (cron-job.org + manual curl)
-  //  - Vercel Cron's signed header (when vercel.json declares this route)
   if (!env.CRON_SECRET) {
     return NextResponse.json({ error: "CRON_SECRET not configured" }, { status: 503 });
   }
-  const auth = req.headers.get("authorization") ?? "";
-  const vercelSig = req.headers.get("x-vercel-signature") ?? "";
-  const isCronJobOrg = auth === `Bearer ${env.CRON_SECRET}`;
-  const isVercelCron = vercelSig.length > 0; // Vercel signs every cron invocation
-  if (!isCronJobOrg && !isVercelCron) {
+  const auth = await authorize(req);
+  if (!auth.ok) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
+  const isCronJobOrg = auth.source !== "vercel-cron";
 
   if (!env.ENABLE_SELF_REFLECTION) {
     return NextResponse.json({ ok: true, skipped: "self-reflection disabled" });
@@ -219,7 +252,27 @@ export async function POST(req: NextRequest) {
   }
 }
 
-/** Health-check via GET — useful when adding to cron-job.org. */
-export async function GET() {
-  return NextResponse.json({ endpoint: "self-improve", auth: "requires Bearer CRON_SECRET", interval: "5m" });
+/**
+ * GET — same behaviour as POST when authorized, useful for cron services
+ * that only support GET (cron-job.org supports both, but some don't).
+ * Unauthorized GETs return a small descriptor instead of running.
+ */
+export async function GET(req: NextRequest) {
+  if (!env.CRON_SECRET) {
+    return NextResponse.json({
+      endpoint: "self-improve",
+      auth: "CRON_SECRET not configured on this deployment",
+    });
+  }
+  const auth = await authorize(req);
+  if (!auth.ok) {
+    return NextResponse.json({
+      endpoint: "self-improve",
+      auth: "either send 'Authorization: Bearer <CRON_SECRET>' header OR append '?token=<CRON_SECRET>' to the URL",
+      interval: "5m via cron-job.org / daily via Vercel Cron",
+    });
+  }
+  // Authorized GET → run the same pipeline as POST. cron-job.org will see a
+  // 200 response with the full tick result.
+  return POST(req);
 }
