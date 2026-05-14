@@ -1,0 +1,15 @@
+{
+  "name": "github-search",
+  "version": "1.0.0",
+  "description": "Search GitHub's public corpus — repos, code, or issues. Free, no auth (rate-limited to ~10 req/min unauthenticated). Use when the user asks 'is there a library that does X?' or 'has anyone solved this issue before?'.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "query": { "type": "string", "description": "Search string (GitHub's normal search syntax, e.g. 'transformer language:python stars:>1000')." },
+      "scope": { "type": "string", "enum": ["repositories", "code", "issues"], "description": "What to search. Defaults to 'repositories'." }
+    },
+    "required": ["query"]
+  },
+  "permissions": ["network"],
+  "author": "aashir-athar"
+}

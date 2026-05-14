@@ -1,0 +1,14 @@
+{
+  "name": "wikipedia",
+  "version": "1.0.0",
+  "description": "Look up a topic on Wikipedia. Returns the article title, summary (first paragraph), and URL. Free, no key, encyclopedic knowledge. Use when the user asks 'what is X?' or 'who is Y?' about a topic likely to have a Wikipedia entry.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "query": { "type": "string", "description": "The topic to look up." }
+    },
+    "required": ["query"]
+  },
+  "permissions": ["network"],
+  "author": "aashir-athar"
+}

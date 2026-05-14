@@ -1,0 +1,14 @@
+{
+  "name": "arxiv",
+  "version": "1.0.0",
+  "description": "Search arXiv for academic papers. Free, no key. Use when the user asks about research, papers, recent advances, or specific algorithms/architectures from the academic literature.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "query": { "type": "string", "description": "Search terms — title keywords, authors, or topics." }
+    },
+    "required": ["query"]
+  },
+  "permissions": ["network"],
+  "author": "aashir-athar"
+}

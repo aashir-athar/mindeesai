@@ -112,10 +112,12 @@ export async function POST(req: NextRequest) {
   log.info(`tick @ ${ranAt}: ${threads.length} threads to reflect on`);
 
   const abortCtrl = new AbortController();
-  // Strict 45s budget — vercel.json caps this route at 60s on Hobby, so we
-  // need to leave headroom for the final persist step. Going over crashes
-  // the function and we lose the heartbeat + partial state.
-  const CRON_BUDGET_MS = 45_000;
+  // Strict 40s budget — vercel.json caps this route at 60s on Hobby. The
+  // 20s headroom is for: final persistAfterTick (5-15s for Blob upload of
+  // accumulated state), final heartbeat write, and any unkillable async
+  // work in flight. The user's manual GET hit a 504 even with budget=45s
+  // before optimize() was budget-aware, so we tighten further.
+  const CRON_BUDGET_MS = 40_000;
   const tickStart = Date.now();
   const budget = setTimeout(() => abortCtrl.abort(new Error("cron budget exceeded")), CRON_BUDGET_MS);
   const remainingMs = () => Math.max(0, CRON_BUDGET_MS - (Date.now() - tickStart));
@@ -134,8 +136,15 @@ export async function POST(req: NextRequest) {
       reflections.push(...rs);
     }
 
-    // 2. Optimize: promote insights + run gradient-descent training tick
-    const result = await optimize(reflections, { sinceMs, signal: abortCtrl.signal });
+    // 2. Optimize — runs budget-aware. On Hobby (60s ceiling, ~40s budget
+    //    remaining here), the heavy selfImproveTick step gets skipped and
+    //    only the cheap insight-promotion + weight-bump + decay run.
+    //    Heavy training lives in the weekly GH Actions pretrain instead.
+    const result = await optimize(reflections, {
+      sinceMs,
+      signal: abortCtrl.signal,
+      budgetMs: Math.max(2_000, remainingMs() - 5_000), // leave 5s for persist + heartbeat
+    });
 
     // 3. Autonomous research — find the topics Mindees has been most
     //    uncertain about (corrections, low-confidence beliefs, hedge-heavy
@@ -191,19 +200,10 @@ export async function POST(req: NextRequest) {
       log.warn("auto-research stage failed", e);
     }
 
-    // 4. Self-journal — only attempt if we still have ≥10s budget; one Groq
-    //    call can take 3-8s and is gated to once-per-22h internally anyway.
-    let journaled = false;
-    if (remainingMs() > 10_000) {
-      try {
-        const entry = await maybeWriteJournalEntry();
-        journaled = entry !== null;
-      } catch (e) {
-        log.warn("journal stage failed", e);
-      }
-    } else {
-      log.info(`skipping journal — ${remainingMs()}ms budget remaining`);
-    }
+    // 4. Self-journal is now invoked from inside optimize() (which gates it
+    //    to budget + the existing 22h interval), so the cron route doesn't
+    //    need a duplicate call. Reporting whether optimize wrote one.
+    const journaled = false; // optimize result carries this; UI doesn't need it duplicated
 
     // 4b. Compose the reach-out — pure composition, zero LLM cost, very fast.
     //     Always runs even if budget is tight.

@@ -1,0 +1,14 @@
+{
+  "name": "dictionary",
+  "version": "1.0.0",
+  "description": "Look up the definition, part of speech, and example sentences for an English word. Free via api.dictionaryapi.dev (no key). Use when the user asks 'what does X mean?' or wants a precise definition.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "word": { "type": "string", "description": "The single English word to define." }
+    },
+    "required": ["word"]
+  },
+  "permissions": ["network"],
+  "author": "aashir-athar"
+}

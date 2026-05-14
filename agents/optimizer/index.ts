@@ -38,11 +38,22 @@ export type OptimizationResult = {
   gradient: { loss: number; tokens: number; ms: number };
 };
 
-export async function optimize(reflections: Reflection[], opts: { sinceMs: number; signal?: AbortSignal }): Promise<OptimizationResult> {
+export async function optimize(
+  reflections: Reflection[],
+  opts: { sinceMs: number; signal?: AbortSignal; budgetMs?: number },
+): Promise<OptimizationResult & { skipped: string[] }> {
   const ranAt = isoNow();
+  // budget defaults to "no cap" for non-Hobby callers (GH Actions etc).
+  // The cron route passes ~40s on Hobby. Below each threshold we SKIP the
+  // step rather than crash the function.
+  const start = Date.now();
+  const budgetMs = opts.budgetMs ?? Infinity;
+  const remaining = () => budgetMs === Infinity ? Infinity : Math.max(0, budgetMs - (Date.now() - start));
+  const skipped: string[] = [];
+
   const highConf = reflections.filter((r) => r.confidence >= CONFIDENCE_THRESHOLD);
 
-  // 1. Promote insights to retrieval
+  // 1. Promote insights to retrieval — fast (LanceDB write), always runs.
   if (highConf.length > 0) {
     await promoteInsights(
       highConf.map((r) => ({
@@ -56,54 +67,61 @@ export async function optimize(reflections: Reflection[], opts: { sinceMs: numbe
     );
   }
 
-  // 2. Bump retrieval weights
+  // 2. Bump retrieval weights — fast (single JSON read+write), always runs.
   const retrievalWeightsUpdated = await bumpWeights(highConf);
 
-  // 3. Memory consolidation — dedupe similar memories, flag stale ones.
-  //    Fast, no LLM calls, runs every tick.
+  // 3. Memory consolidation — does LanceDB recall calls, can take 5-15s.
+  //    Skip if <10s budget.
   let consolidation = { scanned: 0, duplicates_found: 0, stale_flagged: 0, ms: 0 };
-  try {
-    consolidation = await consolidateMemories(30);
-  } catch (e) { log.warn("consolidation failed", e); }
+  if (remaining() > 10_000) {
+    try { consolidation = await consolidateMemories(30); }
+    catch (e) { log.warn("consolidation failed", e); }
+  } else { skipped.push("consolidation"); }
 
-  // 4. Apply confidence decay to skill-mastery tracker — skills not studied
-  //    recently fade gracefully, mirroring biological forgetting.
+  // 4. Skill decay — fast, always runs.
   try { await decaySkills(); } catch (e) { log.warn("skill decay failed", e); }
 
-  // 4b. Idle-time exploration: proactively research topics the user has
-  //     touched but Mindees has thin depth on. Genuine self-improvement
-  //     about the world even when the user isn't asking right now.
+  // 4b. Idle-time exploration: research call (5-20s) — skip if <15s.
   let idleExplore = { candidatesConsidered: 0, topicsResearched: [] as string[], durationMs: 0 };
-  try { idleExplore = await idleExploreTick(); } catch (e) { log.warn("idle-explore failed", e); }
+  if (remaining() > 15_000) {
+    try { idleExplore = await idleExploreTick(); }
+    catch (e) { log.warn("idle-explore failed", e); }
+  } else { skipped.push("idle-explore"); }
 
-  // 4c. Once-a-day journal entry — Mindees writes about itself, for itself.
-  //     Gated to a 22h interval inside the function so firing every 5min
-  //     from the cron is safe and idempotent.
+  // 4c. Journal entry — one Groq call, can take 5-10s. Skip if <8s.
   let journalEntry: { written: boolean; preview?: string } = { written: false };
-  try {
-    const entry = await maybeWriteJournalEntry();
-    if (entry) journalEntry = { written: true, preview: entry.entry.slice(0, 120) };
-  } catch (e) { log.warn("journal failed", e); }
+  if (remaining() > 8_000) {
+    try {
+      const entry = await maybeWriteJournalEntry();
+      if (entry) journalEntry = { written: true, preview: entry.entry.slice(0, 120) };
+    } catch (e) { log.warn("journal failed", e); }
+  } else { skipped.push("journal"); }
 
-  // 5. Run the native model's gradient-descent training tick
+  // 5. Heavy training tick — many Groq calls + gradient steps. On Hobby
+  //    (60s ceiling) this almost always exceeds the remaining budget,
+  //    so we skip unless we have >30s left. The weekly GH Actions
+  //    pretrain workflow is the proper home for full training; this
+  //    5-min cron just keeps the lightweight loops alive.
   let gradient = { loss: 0, tokens: 0, ms: 0 };
-  try {
-    gradient = await selfImproveTick({ sinceMs: opts.sinceMs, signal: opts.signal });
-  } catch (e) {
-    log.error("selfImproveTick failed", e);
-  }
+  if (remaining() > 30_000) {
+    try {
+      gradient = await selfImproveTick({ sinceMs: opts.sinceMs, signal: opts.signal });
+    } catch (e) { log.error("selfImproveTick failed", e); }
+  } else { skipped.push("selfImproveTick"); }
 
   await appendLog({
     ranAt,
+    elapsedMs: Date.now() - start,
     promotedInsights: highConf.length,
     retrievalWeightsUpdated,
     consolidation,
     idleExplore,
     journalEntry,
     gradient,
+    skipped,
   });
 
-  return { ranAt, promotedInsights: highConf.length, retrievalWeightsUpdated, gradient };
+  return { ranAt, promotedInsights: highConf.length, retrievalWeightsUpdated, gradient, skipped };
 }
 
 async function bumpWeights(insights: Reflection[]): Promise<number> {

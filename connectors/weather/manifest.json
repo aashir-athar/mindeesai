@@ -1,0 +1,14 @@
+{
+  "name": "weather",
+  "version": "1.0.0",
+  "description": "Current weather + 3-day forecast for any location. Free via wttr.in (no key, no auth). Use when the user asks about weather, temperature, rain, etc. for a place.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "location": { "type": "string", "description": "City name, airport code, postcode, or 'lat,lon' coordinates. Examples: 'Karachi', 'JFK', '94103', '33.6844,73.0479'." }
+    },
+    "required": ["location"]
+  },
+  "permissions": ["network"],
+  "author": "aashir-athar"
+}

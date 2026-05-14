@@ -1,0 +1,15 @@
+{
+  "name": "hackernews",
+  "version": "1.0.0",
+  "description": "Search HackerNews stories and comments via the Algolia public API. Free, no key. Use to see what the tech community has been discussing about a topic.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "query": { "type": "string", "description": "Search terms." },
+      "type": { "type": "string", "enum": ["story", "comment", "all"], "description": "Restrict to stories, comments, or both. Defaults to 'story'." }
+    },
+    "required": ["query"]
+  },
+  "permissions": ["network"],
+  "author": "aashir-athar"
+}

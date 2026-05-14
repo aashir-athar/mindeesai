@@ -1,0 +1,15 @@
+{
+  "name": "stackoverflow",
+  "version": "1.0.0",
+  "description": "Search Stack Overflow for programming questions and accepted answers. Free via the Stack Exchange API (no key, soft 300 req/day cap). Use when the user has a specific technical/coding problem someone else has probably hit before.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "query": { "type": "string", "description": "Technical question or error message keywords." },
+      "tag": { "type": "string", "description": "Optional Stack Overflow tag to scope the search (e.g. 'python', 'rust', 'typescript')." }
+    },
+    "required": ["query"]
+  },
+  "permissions": ["network"],
+  "author": "aashir-athar"
+}
