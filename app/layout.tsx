@@ -52,9 +52,10 @@ export const metadata: Metadata = {
     creator: "@aashirathar",
     images: ["/og/default.png"],
   },
-  icons: {
-    icon: [{ url: "/favicon.svg", type: "image/svg+xml" }],
-  },
+  // No explicit `icons` block — Next.js App Router auto-detects
+  // app/icon.png (32x32) and app/apple-icon.png (180x180) and emits the
+  // right <link> tags with hashed filenames for cache-busting. Both are
+  // generated from public/assets/mind-logo.png via scripts/gen-favicons.mjs.
   manifest: "/manifest.webmanifest",
 };
 
