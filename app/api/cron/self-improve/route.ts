@@ -113,12 +113,14 @@ export async function POST(req: NextRequest) {
   log.info(`tick @ ${ranAt}: ${threads.length} threads to reflect on`);
 
   const abortCtrl = new AbortController();
-  // Strict 40s budget — vercel.json caps this route at 60s on Hobby. The
-  // 20s headroom is for: final persistAfterTick (5-15s for Blob upload of
-  // accumulated state), final heartbeat write, and any unkillable async
-  // work in flight. The user's manual GET hit a 504 even with budget=45s
-  // before optimize() was budget-aware, so we tighten further.
-  const CRON_BUDGET_MS = 40_000;
+  // Budget depends on environment:
+  //   - On Vercel Hobby (VERCEL=1): 40s cap, fits inside the 60s function
+  //     ceiling. Heavy steps (selfImproveTick) get skipped — they don't
+  //     finish in time.
+  //   - Local dev (no VERCEL env): no ceiling, so 10 min budget — the
+  //     full pipeline runs, training included.
+  const IS_VERCEL = process.env.VERCEL === "1";
+  const CRON_BUDGET_MS = IS_VERCEL ? 40_000 : 10 * 60_000;
   const tickStart = Date.now();
   const budget = setTimeout(() => abortCtrl.abort(new Error("cron budget exceeded")), CRON_BUDGET_MS);
   const remainingMs = () => Math.max(0, CRON_BUDGET_MS - (Date.now() - tickStart));
@@ -233,17 +235,25 @@ export async function POST(req: NextRequest) {
         "utf8",
       );
     } catch { /* ignore */ }
-    await persistAfterTick().catch((e) => log.warn("persist flush failed", e));
+    // Capture the Blob upload stats so the response can show the user
+    // exactly how many files landed in Blob (or WHY it was a no-op).
+    const blobFlush = await persistAfterTick().catch((e) => ({
+      mode: "error" as const, uploaded: 0, failed: 0, durationMs: 0,
+      reason: e instanceof Error ? e.message : String(e),
+    }));
 
     return NextResponse.json({
       ok: true,
       ranAt,
+      env: IS_VERCEL ? "vercel" : "local",
+      budgetMs: CRON_BUDGET_MS,
       elapsedMs: Date.now() - tickStart,
       remainingBudgetMs: remainingMs(),
       threadsReflected: reflections.length > 0 ? Math.min(threads.length, 3) : 0,
       reflectionsTotal: reflections.length,
       autoResearch: researchSummary,
       journaled,
+      blobFlush, // { mode, uploaded, failed, durationMs, reason? }
       result,
     });
   } catch (e) {

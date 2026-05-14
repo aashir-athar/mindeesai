@@ -86,18 +86,32 @@ export async function ensureLanceDBReady(): Promise<void> {
  * EVERY persistence target back to Blob so the next cold function has
  * the latest persona, memory, conversation, and log files.
  *
- * No-op when not in vercel-blob mode.
+ * No-op when not in vercel-blob mode. Returns upload stats so the cron
+ * route can surface them in the response — without this, the user has
+ * no way to tell from the API whether Blob got hit or whether the
+ * flush silently no-op'd.
  */
-export async function persistAfterTick(): Promise<void> {
-  if (MODE !== "vercel-blob") return;
+export interface BlobFlushResult {
+  mode: Mode;
+  uploaded: number;
+  failed: number;
+  durationMs: number;
+  reason?: string;
+}
+
+export async function persistAfterTick(): Promise<BlobFlushResult> {
+  const start = Date.now();
+  if (MODE !== "vercel-blob") {
+    return { mode: MODE, uploaded: 0, failed: 0, durationMs: 0, reason: `MEMORY_PERSISTENCE=${MODE}, not vercel-blob` };
+  }
   if (!env.BLOB_READ_WRITE_TOKEN) {
     log.warn("vercel-blob persistence enabled but BLOB_READ_WRITE_TOKEN missing — skipping flush");
-    return;
+    return { mode: MODE, uploaded: 0, failed: 0, durationMs: 0, reason: "BLOB_READ_WRITE_TOKEN missing" };
   }
+  let uploaded = 0;
+  let failed = 0;
   try {
     const { put } = await import("@vercel/blob");
-    let total = 0;
-    let failed = 0;
     for (const { localRoot, blobPrefix } of SNAPSHOT_TARGETS) {
       const files = await walk(localRoot);
       for (const f of files) {
@@ -109,17 +123,19 @@ export async function persistAfterTick(): Promise<void> {
             token: env.BLOB_READ_WRITE_TOKEN,
             allowOverwrite: true,
           });
-          total++;
+          uploaded++;
         } catch (e) {
           failed++;
           log.warn(`flush failed for ${path.relative(process.cwd(), f)}`, e);
         }
       }
     }
-    log.info(`vercel-blob: flushed ${total} files (${failed} failed)`);
+    log.info(`vercel-blob: flushed ${uploaded} files (${failed} failed)`);
   } catch (e) {
     log.warn("blob flush failed entirely", e);
+    return { mode: MODE, uploaded, failed, durationMs: Date.now() - start, reason: e instanceof Error ? e.message : String(e) };
   }
+  return { mode: MODE, uploaded, failed, durationMs: Date.now() - start };
 }
 
 /**

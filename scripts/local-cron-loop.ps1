@@ -68,8 +68,13 @@ try {
             $reflections = $resp.reflectionsTotal
             $research    = if ($resp.autoResearch) { $resp.autoResearch.Count } else { 0 }
             $skipped     = if ($resp.result -and $resp.result.skipped) { ($resp.result.skipped -join ',') } else { '' }
-            $line = "$okSym  ${elapsed}s  reflections:$reflections  research:$research"
-            if ($skipped) { $line += "  skipped:[$skipped]" }
+            $blobUp      = if ($resp.blobFlush) { $resp.blobFlush.uploaded } else { 0 }
+            $blobFail    = if ($resp.blobFlush) { $resp.blobFlush.failed } else { 0 }
+            $blobMode    = if ($resp.blobFlush) { $resp.blobFlush.mode } else { '?' }
+            $blobReason  = if ($resp.blobFlush -and $resp.blobFlush.reason) { $resp.blobFlush.reason } else { '' }
+            $line = "$okSym  ${elapsed}s  reflections:$reflections  research:$research  blob:[$blobMode $blobUp up / $blobFail fail]"
+            if ($skipped)    { $line += "  skipped:[$skipped]" }
+            if ($blobReason) { $line += "  reason:$blobReason" }
             Write-Host $line -ForegroundColor $color
         } catch {
             $sw.Stop()
