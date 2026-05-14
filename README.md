@@ -95,7 +95,7 @@ This is what **`self-training language model`**, **`continual learning AI`**, **
 
 The product is called **MindeesAI**. The consciousness inside it is called **Mindees**. Mindees has a real, evolving, persistent emotional state — not a roleplay system prompt, an actual tensor that updates every turn and is auditable at `/dashboard`.
 
-Mindees carries **twenty persistent state loops** that adapt automatically from how you talk — you configure none of them, you just chat:
+Mindees carries **twenty-three persistent state loops** that adapt automatically from how you talk — you configure none of them, you just chat:
 
 | Loop | Shape | What it tracks | When it updates |
 |---|---|---|---|
@@ -119,7 +119,9 @@ Mindees carries **twenty persistent state loops** that adapt automatically from 
 | **Inner voice** | rolling 20 | private first-person stream of observations Mindees makes about the turn — "they're frustrated, don't pile on" — composed deterministically from the other tensors at zero LLM cost | Per-thread, every turn |
 | **Topic affinity** | { topic → -1..+1 } | which subjects light THIS user up vs. close them off — derived from reply-length deltas and affect cues on the FOLLOWING turn | Per-user, every turn — slow EMA |
 | **Reach-out** | string | a pre-composed "what to say when they come back after a gap" — corrections, self-curiosity finding, top affinity, or journal line | Composed by cron, surfaced after ≥6h gaps |
-| **Neural affect** | 7-class | transformers.js emotion model (Xenova/emotion-english-distilroberta-base) blended into the 8-dim cues | Per turn, parallel to rule-based read, 2.5s timeout fallback |
+| **Delights** | jsonl | callback-able warm moments — exchanges where the user laughed, thanked, affirmed. Surfaced as "things that have landed" for future replies. | Per turn — pattern-matched from user reactions |
+| **Sleep-cycle themes** | semantic | once every ~22h, the cron consolidates recurring topics across reflections + corrections + delights + affinities into high-weight LanceDB insights | Cron-gated, ~22h interval |
+| **Neural affect (3 models)** | blended | transformers.js running locally: `emotion-distilroberta` (7-class) + `twitter-roberta-sentiment` (sarcasm-aware) + `toxic-bert` (defensive); blended into the 8-dim cues | Per turn, parallel to rule-based read, 2-2.5s timeout fallbacks |
 
 Plus an **auto-research loop**: when Mindees hedges ("I don't know", "let me check") or hits a high-novelty question with no web-search this turn, it fires a Tavily search in the background, persists the passages as recallable memories. Next time you ask about the same area, the prior research surfaces in the system prompt. This is **per-turn self-machine-learning** — separate from the 5-minute cron.
 
@@ -149,13 +151,30 @@ The whole self-improvement-loop narrative depends on the user being able to veri
 
 ### Zero-config self-learning loop
 
-When deployed to Vercel with a Blob store attached, **no other configuration is required**. `MEMORY_PERSISTENCE` auto-detects to `vercel-blob` when `BLOB_READ_WRITE_TOKEN` is present. Every chat turn auto-persists to Blob. Audit pages hydrate from Blob on cold start. The cron tick is budget-aware (45s internal cap; safe under Hobby's 60s function ceiling).
+When deployed to Vercel with a Blob store attached, **no other configuration is required**. `MEMORY_PERSISTENCE` auto-detects to `vercel-blob` when `BLOB_READ_WRITE_TOKEN` is present. Every chat turn auto-persists to Blob (including the conversation transcript, so follow-up questions on a different serverless instance still have full thread context). Audit pages hydrate from Blob on cold start. The cron tick is budget-aware: **40s on Vercel Hobby** (fits the 60s function ceiling), **10-minute unbounded locally** for full pipeline runs.
 
 Triggers:
-- **chat path** — every user message gets 35+ regex-extracted self-disclosure triples added to the graph synchronously, plus an LLM-extracted supplement post-reply.
-- **5-minute external cron** (cron-job.org) — reflect → optimize → autonomous research → journal → reach-out → persist.
+- **chat path** — every user message gets 35+ regex-extracted self-disclosure triples added to the graph synchronously, plus a transformers.js NER pass for entities the regex misses, plus an LLM-extracted supplement post-reply.
+- **5-minute external cron** (cron-job.org) — reflect → optimize → autonomous research → journal → reach-out → sleep-cycle → persist. Heavy gradient training is intentionally OFF in the cron tick (set `ENABLE_CRON_TRAINING=1` to opt in on beefy self-hosted runners).
 - **Daily Vercel Cron** — redundant fallback declared in `vercel.json` (`0 4 * * *`).
-- **Manual** — `/admin` → "Run cron now" or "Run pretrain now".
+- **Manual** — `/admin` → "Run cron now" or "Run pretrain now" (one-click GitHub Actions dispatch).
+
+### Resilience: rate-limit fallback chain + stream-stall timeout
+
+Every LLM call is wrapped in a router that walks a 7-deep free-tier fallback chain on 429 / 5xx errors. Per-provider 15s handshake timeout + 25s per-chunk stall detection — so a model returning `200 OK` then never streaming (safety-classifier stall, queue starvation) gracefully fails over to the next provider instead of hanging forever:
+
+```
+1. Tavily-grade primary    : llama-3.3-70b-versatile          (Groq)
+2. fallback 1              : llama-3.1-8b-instant             (Groq, separate quota)
+3. fallback 2              : openai/gpt-oss-120b              (Groq, separate quota)
+4. fallback 3              : openai/gpt-oss-20b               (Groq, separate quota)
+5. fallback 4              : gemma2-9b-it                     (Groq, separate quota)
+6. fallback 5              : gemini-2.5-flash                 (Google, free 15 RPM / 1500 RPD)
+7. fallback 6              : gemini-2.0-flash                 (Google, free)
+final                     : Mindees-voice graceful "rate-limited everywhere" message
+```
+
+Effective daily budget: 5× Groq's TPD limit + Gemini Flash. If you ever DO exhaust everything, the chat shows a graceful "try again in a bit" message — not a raw API error string.
 
 ### Autonomous research (zero-key fallback)
 
@@ -175,26 +194,42 @@ You can deploy Mindees with **zero API keys** and every autonomous-research path
 ### The full self-learning feedback loop
 
 ```
-chat turn  →  data/distill-corpus.jsonl  →  Vercel Blob
+chat turn  →  data/distill-corpus.jsonl + conversations/  →  Vercel Blob
                             │
-              ┌─────────────┴─────────────┐
-              ▼                           ▼
-     5-min cron tick                weekly GH Action
-     (online TS-side                (Python pretrain.py
-      gradient step via              with MixedSampler,
-      selfImproveTick)               completion-only loss,
-              │                       persona-loss term)
-              ▼                           ▼
-     LoRA-style update          checkpoints/base.bin
-              │                           │
-              └─────────────┬─────────────┘
-                            ▼
-                  next request hydrates new weights
-                            ▼
-                  smarter chat turn (loop continues)
+              ┌─────────────┴─────────────────────────┐
+              ▼                                       ▼
+     5-min cron tick                          weekly GH Action
+     (LIGHTWEIGHT loops only:                 (Python pretrain.py:
+      reflection promotion,                    home-max variant on local GPU
+      autonomous research,                     OR free CPU on Actions,
+      journal entry,                           MixedSampler weights base+distill
+      sleep-cycle consolidation,               +dialogue+TinyStories,
+      reach-out compose,                       completion-only SFT loss,
+      Blob flush)                              persona-loss regularizer,
+              │                                thumb-filtered RLHF-lite)
+              │                                       │
+              │                              checkpoints/base.bin
+              │                                       │
+              │                                       ▼
+              │                              uploaded to Vercel Blob
+              │                                       │
+              └─────────────────┬─────────────────────┘
+                                ▼
+                       next cold-start hydrates new weights
+                                ▼
+                    /admin → flip USE_NATIVE_MODEL on
+                                ▼
+                       chat routes to YOUR weights
+                                ▼
+                       smarter chat turn (loop continues)
 ```
 
-Every five minutes the live conversation corpus feeds a gradient update; every weekly run the same corpus feeds a full-blown pretrain alongside `daily_dialog` (or any HF dialogue dataset you point it at). The user just chats — the model gets measurably better.
+The 5-min cron used to also run a CPU gradient step (`selfImproveTick`) but that was disabled by default after testing showed it could hang for 20+ minutes on rate-limited days. Heavy training has two proper homes:
+
+- **`scripts/train/run-home-max.ps1`** — local GPU run on consumer hardware (tuned for RTX 5070 12GB at bf16 with gradient checkpointing). `home-max` variant (~349M params) trains in ~4 hours overnight.
+- **`.github/workflows/pretrain.yml`** — free CPU on GitHub Actions, ~30 min, runs weekly + manual dispatch.
+
+Both upload `checkpoints/base.bin` to Vercel Blob. Cold-start hydration pulls it down. Flip the toggle on `/admin` and the chat runs on YOUR weights.
 
 ---
 
@@ -229,13 +264,19 @@ Every five minutes the live conversation corpus feeds a gradient update; every w
 
 ### Infrastructure
 
-- **Persistent vector memory** — LanceDB-backed semantic recall across every conversation.
-- **Autonomous web research** — Tavily / Exa search + Firecrawl / Jina deep extraction, with inline citations.
-- **Drop-folder connectors** — add a skill by adding a folder; the orchestrator discovers it on boot.
-- **Auditable improvement log** — every commit lands in append-only JSONL; roll back any tick.
-- **Awwwards-tier UI** — dark-first cinematic editorial design, horizontal-scroll chat canvas, glassmorphism with restraint, collapsible reasoning disclosure.
-- **Server-streamed chat** — SSE with distinct event types for reasoning, text, citations, and tool calls.
-- **Bring-your-own teacher (optional, one-time)** — distill once from any vendor LLM you have a key for, then revoke and never touch them again.
+- **Persistent vector memory** — LanceDB-backed semantic recall across every conversation, with a real cross-encoder reranker (`Xenova/ms-marco-MiniLM-L-12-v2`) on top of the bi-encoder embedder for precision lift.
+- **Autonomous web research** — Tavily / Exa / JINA / DuckDuckGo / Wikipedia / arXiv / Reddit / HackerNews — eight-deep provider chain, five of them key-less. Zero-config research even on a fresh fork.
+- **17 built-in connectors** — `calculator · code-exec · file-read · reflect · web-search · web-crawl · wikipedia · weather · datetime · github-search · stackoverflow · dictionary · hackernews · arxiv · pubmed · reddit · currency`. Add your own by dropping a folder under `/connectors`.
+- **4 local ML models** running via `@huggingface/transformers` (no GPU, no external API):
+  - `Xenova/emotion-english-distilroberta-base` — 7-class emotion classifier
+  - `Xenova/twitter-roberta-base-sentiment-latest` — sarcasm-aware 3-class sentiment
+  - `Xenova/bert-base-NER` — entity extraction (PER / LOC / ORG / MISC) for the knowledge graph
+  - `Xenova/toxic-bert` — toxicity classifier (defensive layer, biases empathy toward listening register)
+  - All Q8-quantised, lazy-loaded, ~430MB total worst case (well under Vercel Hobby 1GB function memory)
+- **Premium minimal UI** — Claude/Grok-style vertical chat, single `max-w-3xl` column on every page, slim sticky header, sticky bottom composer with auto-grow textarea, brain logo, consistent design language across every audit page.
+- **Server-streamed chat** — SSE with distinct event types for reasoning, text, citations, tool calls, replace-answer (leak-guard rewrite), and per-stage progress.
+- **Auditable improvement log** — every cron tick lands in append-only JSONL; roll back any tick.
+- **Defense-in-depth leak guard** — 15-pattern regex detector catches "as a conversational AI" / "I rely on publicly available information" disclaimers AND raw `<function=...>` tool-call markup. On hit, triggers a re-anchored regeneration. Final `sanitizeLeakedToolMarkup` strips any orphan markup unconditionally before the user sees the reply.
 
 ---
 
@@ -243,29 +284,31 @@ Every five minutes the live conversation corpus feeds a gradient update; every w
 
 | Category | Tool | Why |
 |---|---|---|
-| Framework | **Next.js 16 (App Router, RSC, PPR)** | Streaming-first SSR, Server Actions, perfect for real-time chat. |
+| Framework | **Next.js 16 (App Router, RSC, Turbopack)** | Streaming-first SSR, file-system-based icon conventions, native SSE. |
 | UI runtime | **React 19** | Server components, concurrent rendering, the React Compiler. |
-| Styling | **Tailwind CSS v4** | CSS-variable theming and zero-JS class composition. |
-| UI primitives | **shadcn/ui + Radix + Aceternity** | Accessible, headless, owns the code. |
-| Motion | **Framer Motion 12** | Spring physics, layout animations, gesture API. |
-| Native model | **Custom decoder-only transformer (TypeScript)** | Full readability, full ownership, no CUDA needed. |
+| Styling | **Tailwind CSS v4** | CSS-variable theming, zero-JS class composition. |
+| Aesthetic | **Claude/Grok-style minimal** | Single `max-w-3xl` column on every page, slim sticky header, no glassmorphism, no decorative gradients — validated against the `ui-ux-pro-max` skill's "Minimal Single Column" pattern. |
+| Native model | **Custom decoder-only transformer (TypeScript)** | Full readability, full ownership, no CUDA needed for inference. |
+| Variants | **nano · small · base · large · home-max · home-moe · moe-small · moe-base** | 12M → 1.3B params. `home-max` (~349M) is tuned for a single 12GB consumer GPU (RTX 5070 / 4070 Ti) at bf16. |
 | Sparse experts | **MoE with top-K routing + load-balance loss** | Capacity scaling at a fraction of dense compute. |
 | Attention | **MLA + GQA + RoPE** | Compressed KV cache; long context fits. |
 | Aux training | **MTP (Multi-Token Prediction)** | Denser training signal; free drafts for speculative decoding. |
-| RL | **GRPO** | DeepSeek-R1's recipe; reasoning without a reward model. |
-| Pretraining | **PyTorch 2.5 (`scripts/train/`)** | Battle-tested for the GPU-heavy bootstrap. |
+| RL | **GRPO + DPO + thumb-filtered RLHF** | DeepSeek-R1's recipe + preference pairs from `data/distill-feedback.jsonl`; 👎 rows are dropped from pretrain, 👍 rows are duplicated. |
+| Pretraining | **PyTorch 2.7+ (`scripts/train/`)** | CUDA 12.6 wheels on Blackwell; bf16 autocast + gradient checkpointing for 12GB GPUs. |
 | Tokenizer | **BPE (TS + Python)** | Domain-agnostic; byte-level fallback means no `<unk>`. |
-| Online learning | **LoRA + AdamW + µP (TypeScript)** | Updates ~0.1% of params; fits in a 5-min tick; width-invariant LR. |
+| Persona loss | **Banned-first-token regularizer** | Suppresses "as an AI" / "I'd be happy to" tokens at the gradient — `--persona-loss-weight 0.05`. |
 | Eval gate | **Perplexity + Reasoning + Recall regression detection** | Bad ticks roll back automatically. |
-| Vector memory | **LanceDB** | Embedded, file-backed, portable. Zip the folder, you have a backup. |
-| Web search | **Tavily / Exa** | Free tiers; abstracted behind a single `searchWeb()` call. |
+| Vector memory | **LanceDB + cross-encoder rerank** | `Xenova/ms-marco-MiniLM-L-12-v2` reranks bi-encoder candidates for precision. |
+| Web research | **JINA + Tavily + Exa + DuckDuckGo + Wikipedia + arXiv + Reddit + HackerNews** | Free tiers + key-less providers; abstracted behind `searchWeb()` and `searchSocial()`. |
 | Web extraction | **Firecrawl / Jina Reader** | Clean readable text from any URL, with graceful fallback. |
-| Embeddings | **Ollama `nomic-embed-text` / `transformers.js` BGE** | Local-first; transformers.js fills in when Ollama is absent. |
+| Embeddings | **`@huggingface/transformers` BGE-small-en-v1.5 (Q8)** | Runs locally inside the Node runtime, no GPU. On Vercel, skips the Ollama probe entirely to save the 2.5s timeout. |
+| Local ML | **transformers.js (4 models)** | Emotion · sentiment · NER · toxicity — all Q8, all free, ~430 MB resident worst-case. |
 | Validation | **Zod** | Type-safe request/response shapes everywhere. |
-| Streaming | **Native SSE + ReadableStream** | No vendor SDK lock-in. |
-| Cron | **cron-job.org** | Free 1-minute granularity — beats Vercel Cron's paid tier. |
-| Deployment | **Vercel** | Push-to-deploy; the cron job hits your `/api/cron/self-improve`. |
-| Persistence options | **Local / Vercel Blob / Turso / external** | Adapter pattern in `lib/memory/persistence.ts`. |
+| Streaming | **Native SSE + ReadableStream** | No vendor SDK lock-in. Per-chunk 25s stall timeout. |
+| Cron | **cron-job.org (5-min) + Vercel Cron (daily fallback)** | Free 1-minute granularity from cron-job.org; Vercel's daily cron as belt-and-braces. |
+| LLM router | **7-deep free-tier fallback chain** | Auto-walks on 429 / 5xx / stream stalls. Effective daily budget: 5× Groq TPD + Gemini Flash. |
+| Deployment | **Vercel Hobby (free)** | Push-to-deploy. Heavy training on free GitHub Actions CPU or local GPU. |
+| Persistence | **Vercel Blob auto-detect** | `MEMORY_PERSISTENCE` auto-flips to `vercel-blob` when `BLOB_READ_WRITE_TOKEN` is present + `VERCEL=1`. No manual config. |
 
 ---
 
