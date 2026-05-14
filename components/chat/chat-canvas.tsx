@@ -1,21 +1,27 @@
 "use client";
 
 /**
- * ChatCanvas — horizontal "thinking canvas" of exchanges.
+ * ChatCanvas — vertical chat surface, Claude / Grok aesthetic.
  *
- * Design (v2 — fixed):
- *   - Each card = ONE complete exchange (user question + assistant answer)
- *     instead of separating them into two narrow cards.
- *   - Cards are `shrink-0` with a fixed `min-w-[42rem]` so they actually
- *     overflow horizontally instead of squishing.
- *   - Cards are top-aligned (`items-start`) — no full-viewport-height stretch.
- *   - Composer is its own visible card at the right edge, not a stretched
- *     bar at the bottom. Stage indicator lives inside the composer card.
+ * Layout:
+ *   - Slim sticky header (brand · thread switcher · mood/mode pills)
+ *   - Centered max-w-3xl message column (vertical scroll)
+ *   - Bottom-pinned composer (auto-grow textarea, model chips, send)
+ *
+ * Visual language:
+ *   - User messages: right-aligned, subtle rounded "card" — feels like
+ *     paper, not a chat bubble.
+ *   - Assistant messages: full-width, no card, just typography with a
+ *     small brand mark in the gutter. This is the Claude move — it
+ *     prevents the long-form replies from feeling cramped.
+ *
+ * State machine + SSE handling are identical to the prior horizontal
+ * canvas version; only the JSX changed.
  */
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import Link from "next/link";
-import { Send, ArrowLeft, ThumbsUp, ThumbsDown, BookText, Wrench, Sparkles } from "lucide-react";
+import { Send, ArrowLeft, ThumbsUp, ThumbsDown, BookText, Wrench, Plus, Square } from "lucide-react";
 import type { Citation } from "@/lib/types";
 import { trust } from "@/lib/psychology/trust";
 import { nid } from "@/lib/utils";
@@ -24,6 +30,7 @@ import { MessageMarkdown } from "./message-markdown";
 import { ThreadSwitcher } from "./thread-switcher";
 import { ModePill } from "./mode-pill";
 import { ResearchStatus } from "./research-status";
+import { Monogram } from "@/components/marketing/monogram";
 
 type RecalledMemory = { text: string; score: number; source?: string };
 
@@ -53,16 +60,21 @@ export function ChatCanvas({ threadId }: { threadId: string }) {
   const [mood, setMood] = useState<MoodSnapshot | null>(null);
   const [goal, setGoal] = useState<GoalSnapshot>(null);
   const abortRef = useRef<AbortController | null>(null);
-  const canvasRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // On mount + every 30s + after each completed reply, refresh mood + goal.
+  // Mood + goal polling — same logic as before, every 30s + on exchange complete.
   useEffect(() => {
     const load = () => {
       fetch(`/api/persona?threadId=${encodeURIComponent(threadId)}`, { cache: "no-store" })
         .then((r) => (r.ok ? r.json() : null))
         .then((data: { mood?: MoodSnapshot; goal?: { goal: string; confidence: number } } | null) => {
           if (data?.mood) setMood(data.mood);
-          if (data?.goal && data.goal.goal && data.goal.goal !== "unset — first turn" && data.goal.goal !== "exploring — not yet clear") {
+          if (
+            data?.goal && data.goal.goal &&
+            data.goal.goal !== "unset — first turn" &&
+            data.goal.goal !== "exploring — not yet clear"
+          ) {
             setGoal({ goal: data.goal.goal, confidence: data.goal.confidence });
           }
         })
@@ -73,12 +85,25 @@ export function ChatCanvas({ threadId }: { threadId: string }) {
     return () => clearInterval(i);
   }, [threadId, exchanges.length]);
 
-  // Auto-scroll to the rightmost card when a new exchange begins or finishes.
+  // Auto-scroll to bottom on new message or streamed text — only when the
+  // user is already near the bottom (so they aren't yanked away from
+  // re-reading an earlier message).
   useEffect(() => {
-    const el = canvasRef.current;
+    const el = scrollRef.current;
     if (!el) return;
-    requestAnimationFrame(() => el.scrollTo({ left: el.scrollWidth, behavior: "smooth" }));
-  }, [exchanges.length]);
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    if (distanceFromBottom < 240) {
+      requestAnimationFrame(() => el.scrollTo({ top: el.scrollHeight, behavior: "smooth" }));
+    }
+  }, [exchanges]);
+
+  // Auto-grow textarea — Claude/Grok feel
+  useEffect(() => {
+    const t = textareaRef.current;
+    if (!t) return;
+    t.style.height = "auto";
+    t.style.height = `${Math.min(t.scrollHeight, 240)}px`;
+  }, [input]);
 
   async function send(e: FormEvent) {
     e.preventDefault();
@@ -148,7 +173,6 @@ export function ChatCanvas({ threadId }: { threadId: string }) {
     } catch {
       return;
     }
-
     setExchanges((prev) =>
       prev.map((x) => {
         if (x.id !== exId) return x;
@@ -157,14 +181,11 @@ export function ChatCanvas({ threadId }: { threadId: string }) {
             setStage(data.stage ?? "");
             return { ...x, stage: data.stage };
           case "mood":
-            // Update the floating mood pill — not per-exchange, it's global state
             if ((data as { mood?: MoodSnapshot }).mood) setMood((data as { mood: MoodSnapshot }).mood);
             return x;
           case "memories":
             return { ...x, recalled: (data as unknown as { recalled: RecalledMemory[] }).recalled };
           case "replace-answer":
-            // Disclaimer-leak guard fired server-side. Clear the streamed
-            // (leaked) text and replace with the clean rewrite.
             return { ...x, answer: (data as unknown as { text: string }).text ?? "" };
           case "reasoning":
             return { ...x, reasoning: (x.reasoning ?? "") + (data.text ?? "") };
@@ -195,196 +216,225 @@ export function ChatCanvas({ threadId }: { threadId: string }) {
   }
 
   return (
-    <main className="relative min-h-dvh flex flex-col">
-      <header className="fixed top-0 inset-x-0 z-30 px-6 py-4 flex items-center justify-between border-b border-white/[0.06] glass">
-        <div className="flex items-center gap-4">
+    <main className="relative h-dvh flex flex-col bg-ink-950">
+      {/* ─── Slim sticky header ──────────────────────────────────────── */}
+      <header className="sticky top-0 z-30 flex items-center justify-between gap-4 px-6 py-3 border-b border-white/[0.06] bg-ink-950/85 backdrop-blur-xl">
+        <div className="flex items-center gap-3 min-w-0">
           <Link
             href="/"
-            className="text-bone-300 hover:text-bone-100 transition-colors inline-flex items-center gap-1.5 text-sm"
+            aria-label="Home"
+            className="size-8 inline-flex items-center justify-center rounded-lg hover:bg-white/[0.05] transition-colors text-bone-400 hover:text-bone-100"
           >
             <ArrowLeft className="size-4" />
-            Home
           </Link>
-          <span className="h-5 w-px bg-white/[0.08]" aria-hidden />
-          <ThreadSwitcher currentThreadId={threadId} />
+          <Link href="/" aria-label="MindeesAI" className="inline-flex items-center gap-2">
+            <Monogram size={22} />
+            <span className="text-sm font-medium text-bone-100 tracking-tight hidden sm:inline">MindeesAI</span>
+          </Link>
+          <span className="h-5 w-px bg-white/[0.08] hidden sm:inline-block" aria-hidden />
+          <div className="min-w-0">
+            <ThreadSwitcher currentThreadId={threadId} />
+          </div>
         </div>
-        <div className="flex items-center gap-5">
+        <div className="flex items-center gap-3">
           <ResearchStatus />
           {goal && <GoalRibbon goal={goal} />}
           {mood && <MoodPill mood={mood} />}
           <ModePill />
-          <Link href="/dashboard" className="text-sm text-bone-300 hover:text-bone-100 transition-colors hidden sm:inline">
+          <Link
+            href="/dashboard"
+            className="text-xs text-bone-400 hover:text-bone-100 transition-colors hidden md:inline px-2 py-1"
+          >
             Dashboard
           </Link>
         </div>
       </header>
 
-      <div
-        ref={canvasRef}
-        className="horizontal-scroll flex-1 pt-24 pb-12 items-start"
-      >
-        {exchanges.length === 0 ? (
-          <EmptyState />
-        ) : (
-          exchanges.map((ex) => <ExchangeCard key={ex.id} exchange={ex} threadId={threadId} />)
-        )}
+      {/* ─── Vertical message column ─────────────────────────────────── */}
+      <div ref={scrollRef} className="flex-1 overflow-y-auto">
+        <div className="max-w-3xl mx-auto px-4 sm:px-6 py-10 sm:py-16">
+          {exchanges.length === 0 ? (
+            <EmptyState onSelect={(s) => setInput(s)} />
+          ) : (
+            <div className="flex flex-col gap-12">
+              {exchanges.map((ex) => (
+                <Exchange key={ex.id} exchange={ex} threadId={threadId} />
+              ))}
+            </div>
+          )}
+          {/* Bottom spacer so the last message clears the composer */}
+          <div className="h-32" aria-hidden />
+        </div>
+      </div>
 
-        <ComposerCard
-          input={input}
-          setInput={setInput}
-          streaming={streaming}
-          stage={stage}
-          onSubmit={send}
-          onAbort={() => abortRef.current?.abort()}
-        />
-
-        <div className="shrink-0 w-8" aria-hidden />
+      {/* ─── Bottom-pinned composer ──────────────────────────────────── */}
+      <div className="sticky bottom-0 z-20 border-t border-white/[0.06] bg-gradient-to-t from-ink-950 via-ink-950/95 to-ink-950/80 backdrop-blur-xl">
+        <div className="max-w-3xl mx-auto px-4 sm:px-6 py-4">
+          <form
+            onSubmit={send}
+            className="relative rounded-2xl border border-white/[0.08] bg-ink-900/60 focus-within:border-white/[0.18] transition-colors"
+          >
+            <textarea
+              ref={textareaRef}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  void send(e as unknown as FormEvent);
+                }
+              }}
+              rows={1}
+              placeholder={streaming ? trust.thinking : "Ask anything…"}
+              className="w-full resize-none bg-transparent outline-none text-bone-50 placeholder:text-bone-500 px-4 pt-4 pb-12 text-[15px] leading-relaxed"
+              style={{ maxHeight: "240px" }}
+            />
+            <div className="absolute inset-x-0 bottom-0 flex items-center justify-between px-3 pb-3 pointer-events-none">
+              <div className="flex items-center gap-2 pointer-events-auto">
+                {streaming && <StagePill stage={stage} />}
+              </div>
+              <div className="pointer-events-auto">
+                {streaming ? (
+                  <button
+                    type="button"
+                    onClick={() => abortRef.current?.abort()}
+                    aria-label="Stop"
+                    className="size-9 inline-flex items-center justify-center rounded-lg bg-bone-50 text-ink-950 hover:bg-white transition-colors"
+                  >
+                    <Square className="size-3.5 fill-current" />
+                  </button>
+                ) : (
+                  <button
+                    type="submit"
+                    disabled={!input.trim()}
+                    aria-label="Send"
+                    className="size-9 inline-flex items-center justify-center rounded-lg bg-bone-50 text-ink-950 hover:bg-white transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                  >
+                    <Send className="size-3.5" />
+                  </button>
+                )}
+              </div>
+            </div>
+          </form>
+          <p className="text-[11px] text-bone-600 text-center mt-2 font-mono">
+            ⏎ to send · shift+⏎ for newline · MindeesAI can be wrong; verify what matters.
+          </p>
+        </div>
       </div>
     </main>
   );
 }
 
-// ─── Exchange card ─────────────────────────────────────────────────────────
+// ─── One full exchange (user msg + assistant reply) ────────────────────────
 
-function ExchangeCard({ exchange, threadId }: { exchange: Exchange; threadId: string }) {
+function Exchange({ exchange, threadId }: { exchange: Exchange; threadId: string }) {
   return (
-    <article className="shrink-0 w-[42rem] max-w-[88vw] flex flex-col gap-5 glass-strong rounded-3xl p-8 self-start max-h-[calc(100dvh-10rem)] overflow-y-auto">
-      {/* User question */}
-      <header className="flex flex-col gap-2">
-        <p className="text-eyebrow">You</p>
-        <h2 className="text-display text-2xl md:text-3xl leading-snug text-bone-50">
+    <div className="flex flex-col gap-6">
+      {/* User message — right-aligned, soft card */}
+      <div className="flex justify-end">
+        <div className="max-w-[85%] rounded-2xl bg-bone-50/[0.04] border border-white/[0.05] px-4 py-3 text-bone-100 text-[15px] leading-relaxed whitespace-pre-wrap">
           {exchange.question}
-        </h2>
-      </header>
-
-      <div className="h-px bg-gradient-to-r from-white/[0.08] via-white/[0.04] to-transparent" />
-
-      {/* Assistant answer */}
-      <section className="flex flex-col gap-3">
-        <div className="flex items-center justify-between">
-          <p className="text-eyebrow inline-flex items-center gap-2">
-            <span className="size-1.5 rounded-full bg-aurora-400" />
-            MindeesAI
-          </p>
-          {exchange.answer && <ThumbActions threadId={threadId} messageId={exchange.id} />}
         </div>
+      </div>
 
-        {exchange.reasoning && <ReasoningDisclosure text={exchange.reasoning} />}
-
-        {exchange.recalled && exchange.recalled.length > 0 && (
-          <MemoryRecallStrip recalled={exchange.recalled} />
-        )}
-
-        <div className="prose prose-invert max-w-none">
-          {exchange.answer ? (
-            <MessageMarkdown text={exchange.answer} />
-          ) : (
-            <ThinkingShimmer stage={exchange.stage} />
+      {/* Assistant reply — full width, no bubble */}
+      <div className="flex gap-3">
+        <div className="shrink-0 pt-1">
+          <Monogram size={26} />
+        </div>
+        <div className="flex-1 min-w-0">
+          {exchange.recalled && exchange.recalled.length > 0 && (
+            <MemoryRecallStrip recalled={exchange.recalled} />
           )}
-        </div>
 
-        {exchange.toolActivity.length > 0 && (
-          <div className="flex flex-wrap gap-1.5 mt-2">
-            {exchange.toolActivity.map((t, i) => (
-              <span
-                key={i}
-                className={`inline-flex items-center gap-1 text-[11px] font-mono px-2.5 py-1 rounded-full ${
-                  t.ok ? "bg-success/10 text-success" : "bg-danger/10 text-danger"
-                }`}
-              >
-                <Wrench className="size-3" />
-                {t.name} · {Math.round(t.ms)}ms
-              </span>
-            ))}
+          {exchange.reasoning && <ReasoningDisclosure text={exchange.reasoning} />}
+
+          <div className="prose prose-invert prose-sm sm:prose-base max-w-none">
+            {exchange.answer ? (
+              <MessageMarkdown text={exchange.answer} />
+            ) : (
+              <ThinkingShimmer stage={exchange.stage} />
+            )}
           </div>
-        )}
 
-        {exchange.citations.length > 0 && (
-          <footer className="mt-3 pt-4 border-t border-white/[0.06]">
-            <div className="flex items-center gap-2 mb-2">
-              <BookText className="size-3.5 text-bone-500" />
-              <p className="text-eyebrow">{trust.cite(exchange.citations.length)}</p>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {exchange.citations.map((c, i) => (
-                <CitationPill key={`${c.url}-${i}`} idx={i + 1} citation={c} />
+          {exchange.toolActivity.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 mt-3">
+              {exchange.toolActivity.map((t, i) => (
+                <span
+                  key={i}
+                  className={`inline-flex items-center gap-1 text-[10px] font-mono px-2 py-0.5 rounded-full ${
+                    t.ok ? "bg-emerald-900/30 text-emerald-300" : "bg-rose-900/30 text-rose-300"
+                  }`}
+                >
+                  <Wrench className="size-3" />
+                  {t.name} · {Math.round(t.ms)}ms
+                </span>
               ))}
             </div>
-          </footer>
-        )}
-      </section>
-    </article>
+          )}
+
+          {exchange.citations.length > 0 && (
+            <div className="mt-4 pt-3 border-t border-white/[0.05]">
+              <div className="flex items-center gap-2 mb-2">
+                <BookText className="size-3 text-bone-500" />
+                <p className="text-eyebrow">{trust.cite(exchange.citations.length)}</p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {exchange.citations.map((c, i) => (
+                  <CitationPill key={`${c.url}-${i}`} idx={i + 1} citation={c} />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {exchange.answer && !exchange.stage && (
+            <div className="mt-3">
+              <ThumbActions threadId={threadId} messageId={exchange.id} />
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 
-// ─── Composer card (lives in the canvas, not floating) ─────────────────────
+// ─── Empty state ───────────────────────────────────────────────────────────
 
-function ComposerCard({
-  input,
-  setInput,
-  streaming,
-  stage,
-  onSubmit,
-  onAbort,
-}: {
-  input: string;
-  setInput: (s: string) => void;
-  streaming: boolean;
-  stage: string;
-  onSubmit: (e: FormEvent) => void;
-  onAbort: () => void;
-}) {
+function EmptyState({ onSelect }: { onSelect: (s: string) => void }) {
+  const prompts = [
+    "What can you actually do?",
+    "Search the web for the latest Next.js 16 release notes",
+    "Explain how your self-improvement loop works",
+    "What do you remember about me?",
+  ];
   return (
-    <form
-      onSubmit={onSubmit}
-      className="shrink-0 w-[26rem] max-w-[88vw] self-start glass-strong rounded-3xl p-6 flex flex-col gap-4"
-    >
-      <div className="flex items-center justify-between">
-        <p className="text-eyebrow inline-flex items-center gap-2">
-          <Sparkles className="size-3.5 text-aurora-400" />
-          Compose
+    <div className="flex flex-col items-center text-center gap-8 pt-8 sm:pt-16">
+      <Monogram size={72} />
+      <div className="flex flex-col gap-3">
+        <h1 className="text-display text-3xl sm:text-5xl leading-[1.1] text-bone-50">
+          What's on your <em className="not-italic aurora-grad">mind</em>?
+        </h1>
+        <p className="text-bone-400 text-base sm:text-lg max-w-md mx-auto leading-relaxed">
+          MindeesAI remembers every conversation and trains on it. The next thing you ask makes the next answer measurably better.
         </p>
-        {streaming && <StagePill stage={stage} />}
       </div>
-
-      <textarea
-        value={input}
-        onChange={(e) => setInput(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && !e.shiftKey) {
-            e.preventDefault();
-            onSubmit(e as unknown as FormEvent);
-          }
-        }}
-        rows={5}
-        placeholder={streaming ? trust.thinking : "Ask anything…"}
-        className="w-full resize-none bg-transparent outline-none text-bone-100 placeholder:text-bone-500 py-2 text-[15px] leading-relaxed"
-      />
-
-      <div className="flex items-center justify-between gap-2">
-        <p className="text-[11px] text-bone-500 font-mono">⏎ to send · Shift+⏎ for newline</p>
-        {streaming ? (
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 w-full max-w-xl mt-4">
+        {prompts.map((p) => (
           <button
+            key={p}
             type="button"
-            onClick={onAbort}
-            className="px-4 py-2 rounded-2xl glass hover:bg-white/[0.06] text-sm transition-colors"
+            onClick={() => onSelect(p)}
+            className="text-left text-sm text-bone-300 rounded-xl border border-white/[0.06] bg-white/[0.02] hover:bg-white/[0.04] hover:border-white/[0.10] px-4 py-3 transition-colors"
           >
-            Stop
+            {p}
           </button>
-        ) : (
-          <button
-            type="submit"
-            disabled={!input.trim()}
-            className="px-5 py-2.5 rounded-2xl bg-bone-50 text-ink-950 font-medium disabled:opacity-40 disabled:cursor-not-allowed hover:bg-white transition-colors inline-flex items-center gap-1.5 text-sm"
-          >
-            Send
-            <Send className="size-3.5" />
-          </button>
-        )}
+        ))}
       </div>
-    </form>
+    </div>
   );
 }
+
+// ─── Auxiliary components ─────────────────────────────────────────────────
 
 function StagePill({ stage }: { stage: string }) {
   let label: string = "Working…";
@@ -394,62 +444,27 @@ function StagePill({ stage }: { stage: string }) {
   else if (stage.startsWith("tool:")) label = trust.toolPending(stage.slice(5));
   else if (stage === "synthesising") label = trust.draftingFinal;
   return (
-    <span className="inline-flex items-center gap-2 text-[11px] text-bone-300 font-mono">
+    <span className="inline-flex items-center gap-2 text-[10px] text-bone-400 font-mono">
       <span className="size-1.5 rounded-full bg-aurora-400 pulse-dot" />
       {label}
     </span>
   );
 }
 
-// ─── Empty state ──────────────────────────────────────────────────────────
-
-function EmptyState() {
-  return (
-    <article className="shrink-0 w-[42rem] max-w-[88vw] self-start flex flex-col gap-6 p-8">
-      <p className="text-eyebrow">A fresh thread</p>
-      <h1 className="text-display text-4xl md:text-6xl leading-[1.05] text-bone-50">
-        What's on your{" "}
-        <em className="not-italic aurora-grad">mind</em>?
-      </h1>
-      <p className="text-bone-300 text-lg leading-relaxed max-w-md">
-        MindeesAI remembers every conversation and trains on it. The next thing you ask makes the
-        next answer measurably better.
-      </p>
-      <div className="flex flex-col gap-2 mt-4">
-        <p className="text-eyebrow text-bone-500">Try asking</p>
-        {[
-          "What can you actually do?",
-          "Search the web for the latest Next.js 16 release notes",
-          "Explain how your self-improvement loop works",
-        ].map((s) => (
-          <p key={s} className="text-sm text-bone-300 italic">
-            "{s}"
-          </p>
-        ))}
-      </div>
-    </article>
-  );
-}
-
-/**
- * MemoryRecallStrip — surfaces what Mindees actually remembered for this turn.
- * Makes long-term memory tangible: if you see prior snippets here, that's
- * proof retrieval is working.
- */
 function MemoryRecallStrip({ recalled }: { recalled: RecalledMemory[] }) {
   return (
-    <details className="group rounded-xl border border-white/[0.06] bg-warm-400/[0.03] px-4 py-3">
+    <details className="group mb-3 rounded-lg border border-white/[0.06] bg-warm-400/[0.03] px-3 py-2">
       <summary className="cursor-pointer select-none text-eyebrow inline-flex items-center gap-2 hover:text-warm-400 transition-colors">
         <span className="size-1.5 rounded-full bg-warm-400" />
-        I remembered {recalled.length} thing{recalled.length === 1 ? "" : "s"} for this
+        Remembered {recalled.length} thing{recalled.length === 1 ? "" : "s"}
       </summary>
-      <ul className="mt-3 flex flex-col gap-2 text-[13px] text-bone-200 leading-relaxed">
+      <ul className="mt-2 flex flex-col gap-1.5 text-[12px] text-bone-300 leading-relaxed">
         {recalled.map((r, i) => (
           <li key={i} className="flex gap-2">
-            <span className="text-warm-400 text-tabular text-xs mt-1 shrink-0">{(r.score * 100).toFixed(0)}%</span>
+            <span className="text-warm-400 text-tabular text-[10px] mt-1 shrink-0">{(r.score * 100).toFixed(0)}%</span>
             <span className="flex-1">
               <span className="line-clamp-2">{r.text}</span>
-              <span className="text-eyebrow !text-bone-500 ml-2">— {r.source}</span>
+              <span className="text-eyebrow !text-bone-600 ml-2">— {r.source}</span>
             </span>
           </li>
         ))}
@@ -458,28 +473,18 @@ function MemoryRecallStrip({ recalled }: { recalled: RecalledMemory[] }) {
   );
 }
 
-/**
- * GoalRibbon — auto-inferred orientation of the current thread.
- * Refreshed from /api/persona every 30s + after each completed reply.
- * Hidden on small screens. Italic on purpose — it's a soft signal.
- */
 function GoalRibbon({ goal }: { goal: { goal: string; confidence: number } }) {
   return (
     <span
-      className="hidden lg:inline-flex items-center gap-2 max-w-[32ch] truncate text-xs text-bone-400"
+      className="hidden xl:inline-flex items-center gap-2 max-w-[28ch] truncate text-[11px] text-bone-400"
       title={`Goal confidence: ${(goal.confidence * 100).toFixed(0)}%`}
     >
-      <span className="text-eyebrow !text-bone-500">WORKING ON</span>
+      <span className="text-eyebrow !text-bone-600">GOAL</span>
       <span className="text-bone-200 italic truncate">{goal.goal}</span>
     </span>
   );
 }
 
-/**
- * MoodPill — small live indicator of Mindees' dominant emotional dimensions.
- * Reads the global 8-dim mood tensor, surfaces the top 2 non-calm dims as a
- * concise phrase. Updates with every chat turn.
- */
 function MoodPill({ mood }: { mood: MoodSnapshot }) {
   const entries = Object.entries(mood.values).filter(([k]) => k !== "calm");
   entries.sort((a, b) => b[1] - a[1]);
@@ -497,25 +502,24 @@ function MoodPill({ mood }: { mood: MoodSnapshot }) {
   return (
     <Link
       href="/dashboard"
-      title="Mindees' current 8-dimension mood — click for full dashboard"
-      className="hidden md:inline-flex items-center gap-2 px-3 py-1.5 rounded-full glass text-xs text-bone-300 hover:bg-white/[0.04] transition-colors"
+      title="MindeesAI's current 8-dimension mood — click for full dashboard"
+      className="hidden md:inline-flex items-center gap-2 px-2.5 py-1 rounded-full border border-white/[0.06] bg-white/[0.02] text-[11px] text-bone-300 hover:bg-white/[0.04] transition-colors"
     >
       <span className="size-1.5 rounded-full bg-warm-400 pulse-dot" aria-hidden />
-      <span className="text-eyebrow !text-bone-400">MOOD</span>
       <span className="text-bone-100">{summary}</span>
-      <span className="text-bone-500 font-mono text-[10px]">·{mood.steps}</span>
+      <span className="text-bone-600 font-mono text-[9px]">·{mood.steps}</span>
     </Link>
   );
 }
 
 function ReasoningDisclosure({ text }: { text: string }) {
   return (
-    <details className="group">
+    <details className="group mb-3">
       <summary className="cursor-pointer text-eyebrow inline-flex items-center gap-2 select-none hover:text-aurora-400 transition-colors">
         <span className="size-1.5 rounded-full bg-aurora-400" />
         Reasoning · {text.length} chars
       </summary>
-      <div className="mt-3 rounded-xl border border-white/[0.06] bg-ink-800/40 p-4 text-[13px] leading-relaxed text-bone-300 font-mono whitespace-pre-wrap">
+      <div className="mt-2 rounded-lg border border-white/[0.06] bg-ink-800/40 p-3 text-[12px] leading-relaxed text-bone-300 font-mono whitespace-pre-wrap">
         {text}
       </div>
     </details>
@@ -524,7 +528,7 @@ function ReasoningDisclosure({ text }: { text: string }) {
 
 function ThinkingShimmer({ stage }: { stage?: string }) {
   let label: string = trust.thinking;
-  if (stage === "context") label = "Loading your memory…";
+  if (stage === "context") label = "Loading memory…";
   else if (stage === "reasoning") label = "Reasoning step-by-step…";
   else if (stage?.startsWith("tool:")) label = trust.toolPending(stage.slice(5));
   else if (!stage || stage === "synthesising") label = trust.draftingFinal;
@@ -547,12 +551,12 @@ function ThumbActions({ threadId, messageId }: { threadId: string; messageId: st
     }).catch(() => undefined);
   }
   return (
-    <div className="flex gap-1">
+    <div className="flex gap-0.5">
       <button
         aria-label="Thumb up"
         onClick={() => send("up")}
-        className={`p-1.5 rounded-full hover:bg-white/[0.06] transition-colors ${
-          signal === "up" ? "text-aurora-400" : "text-bone-500"
+        className={`p-1.5 rounded-md hover:bg-white/[0.06] transition-colors ${
+          signal === "up" ? "text-emerald-400" : "text-bone-500 hover:text-bone-300"
         }`}
       >
         <ThumbsUp className="size-3.5" />
@@ -560,8 +564,8 @@ function ThumbActions({ threadId, messageId }: { threadId: string; messageId: st
       <button
         aria-label="Thumb down"
         onClick={() => send("down")}
-        className={`p-1.5 rounded-full hover:bg-white/[0.06] transition-colors ${
-          signal === "down" ? "text-danger" : "text-bone-500"
+        className={`p-1.5 rounded-md hover:bg-white/[0.06] transition-colors ${
+          signal === "down" ? "text-rose-400" : "text-bone-500 hover:text-bone-300"
         }`}
       >
         <ThumbsDown className="size-3.5" />
@@ -569,3 +573,7 @@ function ThumbActions({ threadId, messageId }: { threadId: string; messageId: st
     </div>
   );
 }
+
+// Plus icon imported but unused at the moment; keep for future "new thread"
+// shortcut in the composer area.
+void Plus;
