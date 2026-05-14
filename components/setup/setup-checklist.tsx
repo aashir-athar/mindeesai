@@ -51,14 +51,14 @@ function StatusDot({ s }: { s: Status }) {
 
 function Row({ status, label, value, hint }: { status: Status; label: string; value: React.ReactNode; hint?: React.ReactNode }) {
   return (
-    <div className="border border-bone-900 rounded p-4 flex gap-4 items-start">
-      <div className="pt-1.5">
+    <div className="border-t border-white/[0.06] py-5 flex gap-4 items-start">
+      <div className="pt-2 shrink-0">
         <StatusDot s={status} />
       </div>
-      <div className="flex-1">
-        <p className="text-eyebrow mb-1">{label}</p>
-        <p className="text-bone-100 text-sm font-mono">{value}</p>
-        {hint && <p className="text-bone-400 text-xs mt-2 leading-relaxed">{hint}</p>}
+      <div className="flex-1 min-w-0">
+        <p className="text-tabular text-warm-400 text-[10px] uppercase tracking-[0.12em] mb-1.5">{label}</p>
+        <p className="text-bone-100 text-[13px] font-mono break-words">{value}</p>
+        {hint && <p className="text-bone-400 text-[13px] mt-3 leading-relaxed">{hint}</p>}
       </div>
     </div>
   );
@@ -106,10 +106,10 @@ export function SetupChecklist() {
   const researchStatus: Status = counts.auto_research_runs > 0 ? "ok" : "info";
 
   return (
-    <div className="flex flex-col gap-4 max-w-3xl">
+    <div className="flex flex-col">
       <Row
         status={persistenceStatus}
-        label="PERSISTENCE"
+        label="Persistence"
         value={
           <>
             mode: <span className="text-bone-50">{health.persistence.mode}</span>
@@ -136,7 +136,7 @@ export function SetupChecklist() {
 
       <Row
         status={cronStatus}
-        label="CRON (5-minute self-improvement loop)"
+        label="Cron (5-min self-improvement loop)"
         value={
           <>
             configured: {String(health.cron.configured)}
@@ -166,18 +166,18 @@ export function SetupChecklist() {
         }
       />
 
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mt-4">
-        <CountTile status={chatStatus} label="Distill rows" value={counts.distill_rows} hint="Every chat turn = 1 row" />
+      <div className="border-t border-white/[0.06] py-8 grid grid-cols-2 sm:grid-cols-3 gap-x-8 gap-y-6">
+        <CountTile status={chatStatus} label="Distill rows" value={counts.distill_rows} hint="Every chat turn = 1" />
         <CountTile status={graphStatus} label="Graph triples" value={counts.graph_triples} hint="Facts learned about you" />
-        <CountTile status={journalStatus} label="Journal entries" value={counts.journal_entries} hint="Cron-gated, ~22h interval" />
-        <CountTile status={researchStatus} label="Autonomous research" value={counts.auto_research_runs} hint="Topics Mindees studied on its own" />
-        <CountTile status={counts.corrections > 0 ? "ok" : "info"} label="Corrections" value={counts.corrections} hint="Where you said &ldquo;no, it&rsquo;s X&rdquo;" />
+        <CountTile status={journalStatus} label="Journal entries" value={counts.journal_entries} hint="~22h cron interval" />
+        <CountTile status={researchStatus} label="Autonomous research" value={counts.auto_research_runs} hint="Topics studied by Mindees" />
+        <CountTile status={counts.corrections > 0 ? "ok" : "info"} label="Corrections" value={counts.corrections} hint="'no, it's X' moments" />
         <CountTile status={counts.delights > 0 ? "ok" : "info"} label="Delights" value={counts.delights} hint="Moments that landed" />
       </div>
 
       <Row
         status={health.memory.ok ? "ok" : "bad"}
-        label="VECTOR MEMORY (LanceDB)"
+        label="Vector memory (LanceDB)"
         value={
           <>tables: {health.memory.tables.length > 0 ? health.memory.tables.join(", ") : <span className="text-bone-500">none yet</span>}</>
         }
@@ -186,7 +186,7 @@ export function SetupChecklist() {
 
       <Row
         status={health.connectors.count > 0 ? "ok" : "warn"}
-        label="CONNECTORS (skills Mindees can use)"
+        label="Connectors (skills)"
         value={
           <>{health.connectors.count} loaded · {health.connectors.names.join(", ")}</>
         }
@@ -194,11 +194,11 @@ export function SetupChecklist() {
 
       <Row
         status="info"
-        label="FEATURE FLAGS"
+        label="Feature flags"
         value={
           <>
             {Object.entries(health.features).map(([k, v]) => (
-              <span key={k} className="inline-block mr-3">
+              <span key={k} className="inline-block mr-4">
                 {k}: <span className={v ? "text-emerald-400" : "text-bone-500"}>{String(v)}</span>
               </span>
             ))}
@@ -206,10 +206,18 @@ export function SetupChecklist() {
         }
       />
 
-      <div className="mt-6 flex gap-3 flex-wrap">
-        <Link href="/admin" className="px-4 py-2 border border-bone-700 hover:border-bone-300 rounded text-bone-100 text-sm">→ /admin (controls + Run cron now)</Link>
-        <Link href="/dashboard" className="px-4 py-2 border border-bone-700 hover:border-bone-300 rounded text-bone-100 text-sm">→ /dashboard (every tensor)</Link>
-        <a href="/api/health" target="_blank" rel="noreferrer" className="px-4 py-2 border border-bone-700 hover:border-bone-300 rounded text-bone-100 text-sm">→ raw /api/health JSON</a>
+      <div className="border-t border-white/[0.06] pt-8 mt-2 flex gap-3 flex-wrap text-[13px]">
+        <Link href="/admin" className="cursor-pointer text-bone-200 hover:text-bone-50 transition-colors duration-200">
+          /admin →
+        </Link>
+        <span className="text-bone-700">·</span>
+        <Link href="/dashboard" className="cursor-pointer text-bone-200 hover:text-bone-50 transition-colors duration-200">
+          /dashboard →
+        </Link>
+        <span className="text-bone-700">·</span>
+        <a href="/api/health" target="_blank" rel="noreferrer" className="cursor-pointer text-bone-200 hover:text-bone-50 transition-colors duration-200">
+          raw /api/health JSON →
+        </a>
       </div>
     </div>
   );
@@ -217,13 +225,13 @@ export function SetupChecklist() {
 
 function CountTile({ status, label, value, hint }: { status: Status; label: string; value: number; hint: string }) {
   return (
-    <div className="border border-bone-900 rounded p-3">
-      <div className="flex items-center gap-2 mb-1">
+    <div>
+      <div className="flex items-center gap-2 mb-2">
         <StatusDot s={status} />
-        <p className="text-eyebrow">{label}</p>
+        <p className="text-tabular text-warm-400 text-[10px] uppercase tracking-[0.12em]">{label}</p>
       </div>
-      <p className="text-bone-100 text-2xl font-display">{value}</p>
-      <p className="text-bone-500 text-[10px] mt-1">{hint}</p>
+      <p className="text-bone-50 text-[28px] font-display tabular-nums leading-none">{value}</p>
+      <p className="text-bone-600 text-[11px] mt-1.5">{hint}</p>
     </div>
   );
 }

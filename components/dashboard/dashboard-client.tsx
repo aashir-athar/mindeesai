@@ -85,7 +85,7 @@ export function DashboardClient() {
   if (!persona || !health) return <p className="text-bone-500 text-sm">Loading state…</p>;
 
   return (
-    <div className="flex flex-col gap-16">
+    <div className="flex flex-col">
       <ThreadPicker value={threadId} onChange={setThreadId} />
 
       <SystemPanel health={health} mood={persona.mood} />
@@ -111,18 +111,18 @@ export function DashboardClient() {
 
       <Section title="Reward predictor" subtitle={`Based on ${persona.reward.n} thumb signals · confidence ${(persona.reward.confidence * 100).toFixed(0)}%`}>
         <div className="grid grid-cols-12 gap-3 max-w-md">
-          <BarRow label="P(👍)" value={persona.reward.pUp} />
-          <BarRow label="P(👎)" value={persona.reward.pDown} />
+          <BarRow label="P(up)" value={persona.reward.pUp} />
+          <BarRow label="P(down)" value={persona.reward.pDown} />
         </div>
       </Section>
 
       <Section title="Persona drift" subtitle={`${persona.drift.historyLength} fingerprints recorded · ${persona.drift.reanchorsTriggered} re-anchors triggered`}>
         {persona.drift.lastFingerprint ? (
-          <dl className="grid grid-cols-2 gap-y-3 gap-x-8 max-w-md text-tabular text-sm">
+          <dl className="grid grid-cols-2 gap-y-3 gap-x-8 max-w-md text-tabular text-[13px]">
             <KV k="avg sentence length" v={`${persona.drift.lastFingerprint.avgSentenceLen.toFixed(1)} chars`} />
             <KV k="first-person rate" v={persona.drift.lastFingerprint.firstPersonRate.toFixed(3)} />
-            <KV k="as-AI flag" v={persona.drift.lastFingerprint.asAiFlag ? "🚨 yes" : "ok"} />
-            <KV k="corpo-opener flag" v={persona.drift.lastFingerprint.corpoOpenerFlag ? "🚨 yes" : "ok"} />
+            <KV k="as-AI flag" v={persona.drift.lastFingerprint.asAiFlag ? "leaked" : "ok"} />
+            <KV k="corpo-opener flag" v={persona.drift.lastFingerprint.corpoOpenerFlag ? "leaked" : "ok"} />
             <KV k="hedge density" v={persona.drift.lastFingerprint.hedgeDensity.toFixed(3)} />
           </dl>
         ) : (
@@ -142,21 +142,21 @@ export function DashboardClient() {
 
       {persona.affinities.length > 0 && (
         <Section title="Topic affinity" subtitle={`${persona.affinities.length} topics tracked`}>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-3 max-w-3xl">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-x-10 gap-y-3.5">
             {persona.affinities.slice(0, 12).map((a) => (
-              <div key={a.topic} className="col-span-1 grid grid-cols-12 items-center gap-3">
-                <span className={`col-span-5 text-tabular text-sm truncate ${a.affinity > 0.3 ? "text-emerald-300" : a.affinity < -0.3 ? "text-rose-300" : "text-bone-300"}`}>{a.topic}</span>
-                <div className="col-span-5 h-1.5 bg-white/[0.05] rounded-full overflow-hidden relative">
-                  <div className="absolute inset-y-0 left-1/2 w-px bg-white/10" />
+              <div key={a.topic} className="grid grid-cols-12 items-center gap-3 text-[13px]">
+                <span className={`col-span-5 text-tabular truncate ${a.affinity > 0.3 ? "text-emerald-300/90" : a.affinity < -0.3 ? "text-rose-300/90" : "text-bone-300"}`}>{a.topic}</span>
+                <div className="col-span-5 h-px bg-white/[0.06] relative">
+                  <div className="absolute inset-y-[-3px] left-1/2 w-px bg-white/[0.10]" />
                   <div
-                    className={`h-full ${a.affinity >= 0 ? "bg-emerald-400 ml-[50%]" : "bg-rose-400 ml-[50%]"} transition-[width] duration-700 ease-out`}
+                    className={`absolute inset-y-[-1px] ${a.affinity >= 0 ? "bg-emerald-400/80" : "bg-rose-400/80"}`}
                     style={{
                       width: `${Math.abs(a.affinity) * 50}%`,
-                      marginLeft: a.affinity >= 0 ? "50%" : `${50 - Math.abs(a.affinity) * 50}%`,
+                      left: a.affinity >= 0 ? "50%" : `${50 - Math.abs(a.affinity) * 50}%`,
                     }}
                   />
                 </div>
-                <span className="col-span-2 text-tabular text-xs text-bone-500 text-right">×{a.samples}</span>
+                <span className="col-span-2 text-tabular text-[11px] text-bone-500 text-right tabular-nums">×{a.samples}</span>
               </div>
             ))}
           </div>
@@ -164,20 +164,20 @@ export function DashboardClient() {
       )}
 
       {persona.beliefs.length > 0 && (
-        <Section title="Theory of mind" subtitle={`${persona.beliefs.length} belief${persona.beliefs.length === 1 ? "" : "s"} learned about this user`}>
-          <div className="flex flex-wrap gap-2 max-w-3xl">
+        <Section title="Theory of mind" subtitle={`${persona.beliefs.length} belief${persona.beliefs.length === 1 ? "" : "s"} learned about you`}>
+          <div className="flex flex-wrap gap-x-3 gap-y-2 text-[12px] font-mono">
             {persona.beliefs.slice(0, 24).map((b) => (
               <span
                 key={b.topic}
                 title={b.evidence}
-                className={`px-2 py-1 text-xs font-mono rounded-full border ${
-                  b.level === "high" ? "border-emerald-700/60 text-emerald-300 bg-emerald-950/20" :
-                  b.level === "low" ? "border-amber-700/60 text-amber-300 bg-amber-950/20" :
-                  b.level === "uncertain" ? "border-sky-700/60 text-sky-300 bg-sky-950/20" :
-                  "border-bone-800 text-bone-400"
-                }`}
+                className={
+                  b.level === "high" ? "text-emerald-300/80" :
+                  b.level === "low" ? "text-amber-300/80" :
+                  b.level === "uncertain" ? "text-sky-300/80" :
+                  "text-bone-400"
+                }
               >
-                {b.topic} · {b.level}
+                {b.topic} <span className="text-bone-700">·{b.level}</span>
               </span>
             ))}
           </div>
@@ -185,12 +185,12 @@ export function DashboardClient() {
       )}
 
       {persona.innerThoughts.length > 0 && (
-        <Section title="Inner voice" subtitle="Mindees's private noticing-stream — last few turns">
-          <ol className="flex flex-col gap-3 max-w-3xl">
+        <Section title="Inner voice" subtitle="MindeesAI's private noticing stream — last few turns">
+          <ol className="flex flex-col gap-5">
             {persona.innerThoughts.slice(-5).reverse().map((t, i) => (
-              <li key={i} className="border-l-2 border-bone-800 pl-4">
-                <p className="text-bone-200 text-sm italic">{t.text}</p>
-                <p className="text-bone-600 text-[10px] font-mono mt-1">{relative(t.ts)} · {t.derivedFrom.join(" + ") || "—"}</p>
+              <li key={i}>
+                <p className="text-bone-200 text-[14px] italic leading-relaxed">{t.text}</p>
+                <p className="text-bone-600 text-[10px] font-mono mt-1.5">{relative(t.ts)} · {t.derivedFrom.join(" + ") || "—"}</p>
               </li>
             ))}
           </ol>
@@ -198,12 +198,12 @@ export function DashboardClient() {
       )}
 
       {persona.corrections.length > 0 && (
-        <Section title="Past corrections" subtitle={`${persona.corrections.length} time${persona.corrections.length === 1 ? "" : "s"} the user told Mindees it was wrong`}>
-          <ol className="flex flex-col gap-3 max-w-3xl">
+        <Section title="Past corrections" subtitle={`${persona.corrections.length} time${persona.corrections.length === 1 ? "" : "s"} you said 'no, it's X'`}>
+          <ol className="flex flex-col gap-5">
             {persona.corrections.slice(0, 5).map((c, i) => (
-              <li key={i} className="text-sm border border-rose-900/40 rounded p-3 bg-rose-950/10">
-                <p className="text-bone-500 text-xs mb-1">Mindees said: <span className="text-bone-300 italic">&ldquo;{c.wrong}&rdquo;</span></p>
-                <p className="text-bone-300 text-xs">You corrected: <span className="text-rose-200">&ldquo;{c.correction}&rdquo;</span></p>
+              <li key={i} className="text-[13px]">
+                <p className="text-bone-500 mb-1">It said: <span className="text-bone-300 italic">&ldquo;{c.wrong}&rdquo;</span></p>
+                <p className="text-bone-400">You corrected: <span className="text-rose-300/90">&ldquo;{c.correction}&rdquo;</span></p>
               </li>
             ))}
           </ol>
@@ -211,18 +211,18 @@ export function DashboardClient() {
       )}
 
       {persona.signatureVocab.length > 0 && (
-        <Section title="Vocabulary signature" subtitle="Words this user uses unusually often — Mindees mirrors them sparingly">
-          <div className="flex flex-wrap gap-2 max-w-3xl">
+        <Section title="Vocabulary signature" subtitle="Words you use unusually often — MindeesAI mirrors them sparingly">
+          <div className="flex flex-wrap gap-x-3 gap-y-1.5 text-[12px] font-mono text-bone-300">
             {persona.signatureVocab.map((w) => (
-              <span key={w} className="px-2 py-1 text-xs font-mono rounded border border-bone-800 text-bone-300">{w}</span>
+              <span key={w}>{w}</span>
             ))}
           </div>
         </Section>
       )}
 
       {persona.journalLastEntry && (
-        <Section title="Latest journal entry" subtitle={`Mindees wrote this to itself ${relative(persona.journalLastEntry.ts)}`}>
-          <blockquote className="border-l-2 border-warm-600/60 pl-6 max-w-3xl text-bone-100 text-lg leading-[1.65] font-light italic whitespace-pre-wrap">
+        <Section title="Latest journal entry" subtitle={`Written ${relative(persona.journalLastEntry.ts)}`}>
+          <blockquote className="border-l border-warm-400/50 pl-5 text-bone-100 text-[17px] leading-[1.7] font-light italic whitespace-pre-wrap">
             {persona.journalLastEntry.entry}
           </blockquote>
         </Section>
@@ -233,44 +233,44 @@ export function DashboardClient() {
 
 function SystemPanel({ health, mood }: { health: Health; mood: Mood }) {
   return (
-    <div className="glass rounded-2xl px-6 py-5 grid grid-cols-12 gap-x-10 gap-y-4">
-      <Cell label="LIVE" value={
+    <div className="border-y border-white/[0.06] py-6 grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-x-6 gap-y-4 mb-2">
+      <Cell label="Live" value={
         <span className="inline-flex items-center gap-2">
-          <span className={`size-1.5 rounded-full ${health.cron.configured ? "bg-success pulse-dot" : "bg-bone-500"}`} />
+          <span className={`size-1.5 rounded-full ${health.cron.configured ? "bg-emerald-400 pulse-dot" : "bg-bone-600"}`} />
           <span>{health.cron.configured ? "Active" : "Standby"}</span>
         </span>
       } />
-      <Cell label="LAST TICK" value={health.cron.lastTrainingTick ? relative(health.cron.lastTrainingTick.ranAt) : "—"} />
-      <Cell label="LAST LOSS" value={health.cron.lastTrainingTick ? health.cron.lastTrainingTick.loss.toFixed(4) : "—"} />
-      <Cell label="COMMITTED" value={health.cron.lastTrainingTick?.committed === false ? "rolled back" : health.cron.lastTrainingTick ? "yes" : "—"} />
-      <Cell label="MOOD STEPS" value={String(mood.steps)} />
-      <Cell label="CONNECTORS" value={String(health.connectors.count)} />
-      <Cell label="MEMORY" value={health.memory.ok ? "online" : "—"} />
+      <Cell label="Last tick" value={health.cron.lastTrainingTick ? relative(health.cron.lastTrainingTick.ranAt) : "—"} />
+      <Cell label="Last loss" value={health.cron.lastTrainingTick ? health.cron.lastTrainingTick.loss.toFixed(4) : "—"} />
+      <Cell label="Committed" value={health.cron.lastTrainingTick?.committed === false ? "rolled back" : health.cron.lastTrainingTick ? "yes" : "—"} />
+      <Cell label="Mood steps" value={String(mood.steps)} />
+      <Cell label="Connectors" value={String(health.connectors.count)} />
+      <Cell label="Memory" value={health.memory.ok ? "online" : "—"} />
     </div>
   );
 }
 
 function ThreadPicker({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   return (
-    <label className="flex items-center gap-3 text-sm text-bone-300">
-      <span className="text-eyebrow">THREAD</span>
+    <label className="flex items-center gap-3 text-[13px] text-bone-400 pb-8 border-b border-white/[0.06] mb-2">
+      <span className="text-tabular text-warm-400 text-[10px] uppercase tracking-[0.12em]">Thread</span>
       <input
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder="default"
-        className="glass rounded-full px-4 py-1.5 text-tabular text-bone-100 outline-none w-64"
+        className="bg-transparent border-b border-white/[0.10] focus:border-warm-400/60 text-bone-100 px-1 py-1 outline-none w-64 text-tabular transition-colors duration-200"
       />
-      <span className="text-eyebrow !text-bone-500">paste a thread ID to inspect</span>
+      <span className="text-bone-600 text-[11px]">paste a thread ID to inspect</span>
     </label>
   );
 }
 
 function Section({ title, subtitle, children }: { title: string; subtitle: string; children: React.ReactNode }) {
   return (
-    <section className="flex flex-col gap-5 reveal">
-      <header className="flex items-baseline gap-4">
-        <h2 className="text-display text-2xl text-bone-50">{title}</h2>
-        <span className="text-eyebrow">{subtitle}</span>
+    <section className="py-10 border-t border-white/[0.06] first:border-t-0">
+      <header className="mb-6">
+        <h2 className="text-display text-xl sm:text-2xl text-bone-50 tracking-tight leading-tight">{title}</h2>
+        <p className="text-bone-500 text-[12px] mt-1">{subtitle}</p>
       </header>
       {children}
     </section>
@@ -280,7 +280,7 @@ function Section({ title, subtitle, children }: { title: string; subtitle: strin
 function BarGrid({ values }: { values: Record<string, number> }) {
   const entries = Object.entries(values);
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-3 max-w-3xl">
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-x-10 gap-y-3.5">
       {entries.map(([k, v]) => <BarRow key={k} label={k} value={v} />)}
     </div>
   );
@@ -289,24 +289,24 @@ function BarGrid({ values }: { values: Record<string, number> }) {
 function BarRow({ label, value }: { label: string; value: number }) {
   const pct = Math.max(0, Math.min(1, value)) * 100;
   return (
-    <div className="col-span-12 grid grid-cols-12 items-center gap-3">
-      <span className="col-span-4 text-eyebrow truncate">{label}</span>
-      <div className="col-span-6 h-1.5 bg-white/[0.05] rounded-full overflow-hidden">
+    <div className="grid grid-cols-12 items-center gap-3 text-[12px]">
+      <span className="col-span-4 text-bone-400 truncate">{label}</span>
+      <div className="col-span-6 h-px bg-white/[0.06] relative">
         <div
-          className="h-full bg-gradient-to-r from-aurora-400 to-warm-400 transition-[width] duration-700 ease-out"
+          className="absolute inset-y-[-1px] left-0 bg-warm-400/80 transition-[width] duration-500 ease-out"
           style={{ width: `${pct}%` }}
         />
       </div>
-      <span className="col-span-2 text-tabular text-sm text-bone-100 text-right">{value.toFixed(3)}</span>
+      <span className="col-span-2 text-tabular text-[11px] text-bone-200 text-right tabular-nums">{value.toFixed(3)}</span>
     </div>
   );
 }
 
 function Cell({ label, value }: { label: string; value: React.ReactNode }) {
   return (
-    <div className="col-span-12 sm:col-span-3 md:col-span-2 flex flex-col gap-0.5">
-      <span className="text-eyebrow">{label}</span>
-      <span className="text-tabular text-base text-bone-50">{value}</span>
+    <div className="flex flex-col gap-1">
+      <span className="text-tabular text-warm-400 text-[10px] uppercase tracking-[0.12em]">{label}</span>
+      <span className="text-tabular text-[14px] text-bone-100">{value}</span>
     </div>
   );
 }
@@ -314,8 +314,8 @@ function Cell({ label, value }: { label: string; value: React.ReactNode }) {
 function KV({ k, v }: { k: string; v: React.ReactNode }) {
   return (
     <>
-      <dt className="text-eyebrow self-center">{k}</dt>
-      <dd className="text-bone-50">{v}</dd>
+      <dt className="text-bone-500 self-center">{k}</dt>
+      <dd className="text-bone-100 text-right">{v}</dd>
     </>
   );
 }

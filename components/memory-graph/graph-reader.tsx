@@ -78,27 +78,25 @@ export function GraphReader() {
     .slice(0, 10);
 
   return (
-    <div className="flex flex-col gap-8 max-w-4xl">
+    <div className="flex flex-col gap-10">
       <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-center">
         <input
           type="text"
           placeholder="Search subject, predicate, or object…"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          className="flex-1 bg-black border border-bone-800 rounded px-3 py-2 text-bone-100 font-mono text-sm focus:outline-none focus:border-bone-500"
+          className="flex-1 bg-transparent border-b border-white/[0.10] focus:border-warm-400/60 px-1 py-2 text-bone-100 text-[14px] outline-none transition-colors"
         />
-        <p className="text-bone-500 text-xs font-mono whitespace-nowrap">
+        <p className="text-bone-500 text-[11px] font-mono whitespace-nowrap tabular-nums">
           {filtered.length} / {data.count} triples
         </p>
       </div>
 
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap gap-x-3 gap-y-2 text-[12px]">
         <button
           onClick={() => setPredicate(null)}
-          className={`px-2 py-1 text-xs font-mono uppercase rounded border transition ${
-            predicate === null
-              ? "border-bone-300 text-bone-100 bg-bone-900"
-              : "border-bone-800 text-bone-500 hover:text-bone-300"
+          className={`cursor-pointer font-mono lowercase tracking-wider transition-colors duration-200 ${
+            predicate === null ? "text-bone-50" : "text-bone-500 hover:text-bone-200"
           }`}
         >
           all
@@ -107,33 +105,31 @@ export function GraphReader() {
           <button
             key={p}
             onClick={() => setPredicate(p === predicate ? null : p)}
-            className={`px-2 py-1 text-xs font-mono lowercase rounded border transition ${
-              predicate === p
-                ? "border-bone-300 text-bone-100 bg-bone-900"
-                : "border-bone-800 text-bone-500 hover:text-bone-300"
+            className={`cursor-pointer font-mono lowercase tracking-wider transition-colors duration-200 ${
+              predicate === p ? "text-bone-50" : "text-bone-500 hover:text-bone-200"
             }`}
           >
-            {p.replace(/_/g, " ")} <span className="text-bone-600">({n})</span>
+            {p.replace(/_/g, " ")}<span className="text-bone-700"> {n}</span>
           </button>
         ))}
       </div>
 
-      <div className="flex flex-col divide-y divide-bone-900">
+      <div className="flex flex-col divide-y divide-white/[0.06]">
         {filtered.slice(0, 200).map((t, i) => (
-          <div key={i} className="py-3 grid grid-cols-[1fr_auto_1fr_auto] gap-3 items-center">
+          <div key={i} className="py-3 grid grid-cols-[1fr_auto_1fr] sm:grid-cols-[1fr_auto_1fr_auto] gap-3 sm:gap-5 items-center text-[14px]">
             <span className="text-bone-100 truncate">{t.subject}</span>
-            <span className="text-bone-500 font-mono text-xs uppercase whitespace-nowrap">
+            <span className="text-bone-500 font-mono text-[10px] uppercase tracking-wider whitespace-nowrap">
               {t.predicate.replace(/_/g, " ")}
             </span>
-            <span className="text-bone-200 truncate">{t.object}</span>
-            <span className="text-bone-700 font-mono text-[10px] whitespace-nowrap">
+            <span className="text-bone-300 truncate">{t.object}</span>
+            <span className="hidden sm:inline text-bone-700 font-mono text-[10px] whitespace-nowrap tabular-nums">
               {t.createdAt ? new Date(t.createdAt).toLocaleDateString() : "—"}
             </span>
           </div>
         ))}
         {filtered.length > 200 && (
-          <p className="text-bone-600 text-xs font-mono pt-3">
-            …showing first 200 of {filtered.length}. Refine the search to narrow.
+          <p className="text-bone-600 text-[11px] font-mono pt-3">
+            Showing first 200 of {filtered.length}. Refine the search to narrow.
           </p>
         )}
       </div>

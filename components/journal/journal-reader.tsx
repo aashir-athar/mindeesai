@@ -42,32 +42,31 @@ export function JournalReader() {
     return () => { alive = false; };
   }, []);
 
-  if (error) return <p className="text-danger text-sm">Error: {error}</p>;
+  if (error) return <p className="text-rose-300 text-sm">Error: {error}</p>;
   if (!entries) return <p className="text-bone-500 text-sm">Loading entries…</p>;
   if (entries.length === 0) {
     return (
-      <p className="text-bone-500 text-sm max-w-xl leading-relaxed">
-        No journal entries yet. Mindees writes one every ~22 hours during the
-        scheduled cron tick. The first one lands a day or so after deploy.
+      <p className="text-bone-500 text-[15px] leading-relaxed max-w-xl">
+        No journal entries yet. MindeesAI writes one every ~22 hours during the scheduled cron tick. The first one lands within a few hours of the first chat.
       </p>
     );
   }
 
   return (
-    <div className="flex flex-col gap-10 max-w-3xl">
+    <div className="flex flex-col gap-14">
       {entries.map((e) => {
         const d = new Date(e.ts);
         const dateStr = d.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
         const timeStr = d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
         return (
-          <article key={e.ts} className="border-l-2 border-bone-800 pl-6">
-            <p className="text-eyebrow mb-3 text-bone-500">
+          <article key={e.ts}>
+            <p className="text-tabular text-warm-400 text-[10px] uppercase tracking-[0.12em] mb-3">
               {dateStr} · {timeStr}
             </p>
-            <p className="text-bone-100 text-lg leading-[1.65] font-light whitespace-pre-wrap">
+            <p className="text-bone-100 text-[17px] leading-[1.7] font-light whitespace-pre-wrap">
               {e.entry}
             </p>
-            <p className="text-bone-600 text-xs font-mono mt-4">
+            <p className="text-bone-600 text-[11px] font-mono mt-5">
               {topMoodDims(e.mood_at_writing).join(" · ")}
               {e.top_topics.length > 0 && (
                 <> · topics: {e.top_topics.slice(0, 5).join(", ")}</>

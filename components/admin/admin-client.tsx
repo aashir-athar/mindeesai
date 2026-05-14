@@ -153,29 +153,27 @@ export function AdminClient() {
   };
 
   return (
-    <div className="grid gap-8 max-w-3xl">
-      {/* ─── Current mode card ─────────────────────────────────────────── */}
-      <div className="border border-bone-800 rounded-md p-6 bg-bone-950">
-        <p className="text-eyebrow mb-3">INFERENCE MODE — RIGHT NOW</p>
-        <p className="text-2xl font-display text-bone-100 mb-1">{mode?.label ?? "…"}</p>
-        <p className="text-bone-500 text-xs font-mono">
+    <div className="flex flex-col">
+      {/* ─── Current mode ─────────────────────────────────────────────── */}
+      <Panel kicker="Inference mode — right now">
+        <p className="text-[24px] sm:text-[28px] text-bone-50 font-display leading-tight tracking-tight">{mode?.label ?? "…"}</p>
+        <p className="text-bone-500 text-[12px] font-mono mt-2">
           mode: {mode?.mode ?? "—"}  ·  variant: {mode?.variant ?? "—"}  ·  checkpoint: {mode?.flags.checkpoint_present ? "present" : "MISSING"}
         </p>
-      </div>
+      </Panel>
 
       {/* ─── Native-model toggle ───────────────────────────────────────── */}
-      <div className="border border-bone-800 rounded-md p-6 bg-bone-950">
+      <Panel kicker="USE_NATIVE_MODEL">
         <div className="flex justify-between items-start gap-6 flex-wrap">
           <div className="flex-1 min-w-[260px]">
-            <p className="text-eyebrow mb-2">USE_NATIVE_MODEL</p>
-            <p className="text-bone-300 text-sm leading-relaxed">
-              When ON, the chat orchestrator routes through Mindees&rsquo; own
-              transformer (<span className="font-mono">core/mindees-mind</span>).
+            <p className="text-bone-300 text-[14px] leading-relaxed">
+              When ON, the chat orchestrator routes through MindeesAI&rsquo;s own transformer
+              (<span className="font-mono text-bone-100">core/mindees-mind</span>).
               When OFF, it routes through the cloud LLM router (Groq today).
-              Takes effect on the very next message — no redeploy needed.
+              Takes effect on the next message — no redeploy needed.
             </p>
-            <p className="text-bone-500 text-xs font-mono mt-2">
-              current: <span className={flags?.flags?.useNativeModel ? "text-emerald-400" : "text-amber-400"}>
+            <p className="text-bone-500 text-[12px] font-mono mt-3">
+              current: <span className={flags?.flags?.useNativeModel ? "text-emerald-400" : "text-bone-400"}>
                 {flags?.flags?.useNativeModel ? "ON" : "OFF"}
               </span>
               {flags?.flags?.source && (
@@ -183,122 +181,113 @@ export function AdminClient() {
               )}
             </p>
             {flags?.checkpoint_present === false && (
-              <p className="text-amber-400 text-xs mt-3">
-                ⚠ No checkpoint on disk. Flipping ON will keep cloud routing
-                until a checkpoint hydrates (the orchestrator double-checks
-                before swapping brains).
+              <p className="text-amber-400/80 text-[12px] mt-3">
+                No checkpoint on disk yet. Flipping ON will keep cloud routing until a checkpoint hydrates (the orchestrator double-checks before swapping brains).
               </p>
             )}
           </div>
-          <button
-            onClick={() => void flip()}
-            disabled={busy || !flags?.ok}
-            className="px-6 py-3 border border-bone-700 hover:border-bone-300 transition-colors rounded text-bone-100 font-mono text-sm disabled:opacity-50 disabled:cursor-not-allowed"
-          >
+          <Btn primary onClick={() => void flip()} disabled={busy || !flags?.ok}>
             {busy ? "…" : flags?.flags?.useNativeModel ? "Switch to CLOUD" : "Switch to NATIVE"}
-          </button>
+          </Btn>
         </div>
-      </div>
+      </Panel>
 
-      {/* ─── Train Now (fire GitHub Actions pretrain workflow) ────────── */}
-      <div className="border border-bone-800 rounded-md p-6 bg-bone-950">
+      {/* ─── Train Now ─────────────────────────────────────────────────── */}
+      <Panel kicker="Train now">
         <div className="flex justify-between items-start gap-6 flex-wrap mb-4">
           <div className="flex-1 min-w-[260px]">
-            <p className="text-eyebrow mb-2">TRAIN NOW</p>
-            <p className="text-bone-300 text-sm leading-relaxed">
-              Fires the GitHub Actions pretrain workflow on the <span className="font-mono">main</span> branch.
-              Streams ~30 minutes of CPU-only training on the seed corpus +
-              live distill corpus + dialogue corpus, then uploads
-              <span className="font-mono"> checkpoints/base.bin</span> to Vercel Blob.
-              Next Vercel cold-start hydrates the new weights.
+            <p className="text-bone-300 text-[14px] leading-relaxed">
+              Fires the GitHub Actions pretrain workflow on the <span className="font-mono text-bone-100">main</span> branch.
+              ~30 minutes of CPU-only training; uploads <span className="font-mono text-bone-100">checkpoints/base.bin</span> to Vercel Blob. Next cold-start hydrates the new weights.
             </p>
-            <p className="text-bone-500 text-xs mt-2">
-              Needs a GitHub fine-grained PAT with <span className="font-mono">Actions: Read &amp; Write</span> on this repo.
-              Paste once, stays in sessionStorage. Never sent server-side.
+            <p className="text-bone-500 text-[12px] mt-3">
+              Needs a GitHub fine-grained PAT with <span className="font-mono text-bone-300">Actions: Read &amp; Write</span> on this repo. Paste once; never sent server-side.
             </p>
           </div>
-          <button
-            onClick={() => void triggerTrain()}
-            disabled={busy || !flags?.ok || !githubPAT}
-            className="px-6 py-3 border border-warm-600 hover:border-warm-300 transition-colors rounded text-warm-100 font-mono text-sm disabled:opacity-50 disabled:cursor-not-allowed"
-          >
+          <Btn onClick={() => void triggerTrain()} disabled={busy || !flags?.ok || !githubPAT}>
             {busy ? "dispatching…" : "Run pretrain"}
-          </button>
+          </Btn>
         </div>
-        <div className="flex gap-2 items-stretch mb-3">
-          <input
-            type="password"
-            value={githubPAT}
-            onChange={(e) => setGithubPAT(e.target.value)}
-            placeholder="ghp_... or github_pat_..."
-            className="flex-1 bg-black border border-bone-800 rounded px-3 py-2 text-bone-100 font-mono text-xs"
-          />
-        </div>
+        <input
+          type="password"
+          value={githubPAT}
+          onChange={(e) => setGithubPAT(e.target.value)}
+          placeholder="ghp_... or github_pat_..."
+          className="w-full bg-transparent border-b border-white/[0.10] focus:border-warm-400/60 px-1 py-2 text-bone-100 font-mono text-[12px] outline-none transition-colors duration-200"
+        />
         {trainResult && (
-          <pre className="text-bone-300 text-[11px] font-mono bg-black border border-bone-900 rounded p-3 max-h-[200px] overflow-auto whitespace-pre-wrap break-all">
+          <pre className="text-bone-300 text-[11px] font-mono mt-4 border border-white/[0.06] rounded p-3 max-h-[200px] overflow-auto whitespace-pre-wrap break-all">
             {trainResult}
           </pre>
         )}
-      </div>
+      </Panel>
 
-      {/* ─── Run cron now ───────────────────────────────────────────────── */}
-      <div className="border border-bone-800 rounded-md p-6 bg-bone-950">
+      {/* ─── Run cron now ──────────────────────────────────────────────── */}
+      <Panel kicker="Self-improvement cron">
         <div className="flex justify-between items-start gap-6 flex-wrap mb-4">
           <div className="flex-1 min-w-[260px]">
-            <p className="text-eyebrow mb-2">SELF-IMPROVEMENT CRON</p>
-            <p className="text-bone-300 text-sm leading-relaxed">
-              Manually fire <span className="font-mono">/api/cron/self-improve</span> right now.
-              Same endpoint cron-job.org and Vercel Cron hit. Useful for
-              verifying that reflection + autonomous research + journal +
-              training-tick actually work, without waiting for the next
-              scheduled invocation.
+            <p className="text-bone-300 text-[14px] leading-relaxed">
+              Manually fire <span className="font-mono text-bone-100">/api/cron/self-improve</span>. Same endpoint cron-job.org and Vercel Cron hit. Useful for verifying the full pipeline without waiting for the next scheduled invocation.
             </p>
-            <p className="text-bone-500 text-xs font-mono mt-2">
-              Budget: 45s internal cap (vercel.json maxDuration: 60s on Hobby).
+            <p className="text-bone-500 text-[12px] font-mono mt-3">
+              Budget: 40s on Vercel (Hobby ceiling); unbounded locally.
             </p>
           </div>
-          <button
-            onClick={() => void runCron()}
-            disabled={busy || !flags?.ok}
-            className="px-6 py-3 border border-emerald-700 hover:border-emerald-300 transition-colors rounded text-emerald-100 font-mono text-sm disabled:opacity-50 disabled:cursor-not-allowed"
-          >
+          <Btn onClick={() => void runCron()} disabled={busy || !flags?.ok}>
             {busy ? "running…" : "Run cron now"}
-          </button>
+          </Btn>
         </div>
         {cronResult && (
-          <pre className="text-bone-300 text-[11px] font-mono bg-black border border-bone-900 rounded p-3 max-h-[280px] overflow-auto whitespace-pre-wrap break-all">
+          <pre className="text-bone-300 text-[11px] font-mono mt-2 border border-white/[0.06] rounded p-3 max-h-[280px] overflow-auto whitespace-pre-wrap break-all">
             {cronResult}
           </pre>
         )}
-      </div>
+      </Panel>
 
-      {/* ─── Auth ──────────────────────────────────────────────────────── */}
+      {/* ─── Auth (only shown when unauthenticated) ────────────────────── */}
       {!flags?.ok && (
-        <div className="border border-amber-900/60 rounded-md p-6 bg-amber-950/20">
-          <p className="text-eyebrow mb-3 text-amber-400">AUTH REQUIRED</p>
-          <p className="text-bone-300 text-sm mb-4">
-            This endpoint is gated by CRON_SECRET. Paste it once — it lives in
-            sessionStorage and is cleared when you close the tab.
+        <Panel kicker="Auth required">
+          <p className="text-bone-300 text-[14px] mb-4 leading-relaxed">
+            This endpoint is gated by CRON_SECRET. Paste it once — it lives in sessionStorage and clears when you close the tab.
           </p>
-          <div className="flex gap-2 items-stretch">
+          <div className="flex gap-3 items-stretch">
             <input
               type="password"
               value={token}
               onChange={(e) => setToken(e.target.value)}
               placeholder="CRON_SECRET"
-              className="flex-1 bg-black border border-bone-800 rounded px-3 py-2 text-bone-100 font-mono text-sm"
+              className="flex-1 bg-transparent border-b border-white/[0.10] focus:border-warm-400/60 px-1 py-2 text-bone-100 font-mono text-[12px] outline-none transition-colors duration-200"
             />
-            <button
-              onClick={saveToken}
-              className="px-4 py-2 border border-bone-700 hover:border-bone-300 transition-colors rounded text-bone-100 font-mono text-sm"
-            >
-              Save
-            </button>
+            <Btn primary onClick={saveToken}>Save</Btn>
           </div>
-        </div>
+        </Panel>
       )}
 
-      {error && <p className="text-danger text-sm">Error: {error}</p>}
+      {error && <p className="text-rose-300 text-[13px] pt-6 border-t border-white/[0.06]">Error: {error}</p>}
     </div>
+  );
+}
+
+// ─── Panel + Btn primitives ───────────────────────────────────────────────
+
+function Panel({ kicker, children }: { kicker: string; children: React.ReactNode }) {
+  return (
+    <div className="border-t border-white/[0.06] py-8">
+      <p className="text-tabular text-warm-400 text-[10px] uppercase tracking-[0.12em] mb-4">{kicker}</p>
+      {children}
+    </div>
+  );
+}
+
+function Btn({ children, primary, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement> & { primary?: boolean }) {
+  const base =
+    "cursor-pointer text-[13px] font-medium rounded-lg px-4 py-2 transition-colors duration-200 disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bone-50/40";
+  const variant = primary
+    ? "text-ink-950 bg-bone-50 hover:bg-white"
+    : "text-bone-200 border border-white/[0.10] hover:bg-white/[0.04] hover:border-white/[0.18]";
+  return (
+    <button {...props} className={`${base} ${variant}`}>
+      {children}
+    </button>
   );
 }
