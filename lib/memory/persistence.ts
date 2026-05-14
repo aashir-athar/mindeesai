@@ -156,6 +156,13 @@ export async function persistPersonaQuick(): Promise<void> {
   if (!env.BLOB_READ_WRITE_TOKEN) return;
 
   const personaRoots = [
+    // The actual conversation transcripts — written to per turn via
+    // appendMessage(). Without this, follow-up questions on a different
+    // serverless instance read an empty thread file ('forgot the topic'
+    // bug). The conversations/ directory is also picked up by the cron's
+    // full persistAfterTick but that's every 5 min — way too slow for
+    // intra-session continuity. Must be quick-flushed.
+    path.join(DATA_DIR, "conversations"),
     path.join(DATA_DIR, "user-models"),
     path.join(DATA_DIR, "relationships"),
     // v0.2.5+ per-thread tensors

@@ -17,6 +17,7 @@
 
 import { NextRequest } from "next/server";
 import { orchestrate } from "@/agents/orchestrator";
+import { ensureLanceDBReady } from "@/lib/memory/persistence";
 import { z } from "zod";
 
 export const runtime = "nodejs";
@@ -37,6 +38,14 @@ export async function POST(req: NextRequest) {
       headers: { "content-type": "application/json" },
     });
   }
+
+  // Critical for thread continuity on Vercel: each /api/chat call can hit
+  // a different function instance with its own empty /tmp. Without
+  // ensuring Blob hydration BEFORE the orchestrator reads the thread
+  // file, follow-up questions read [] and the LLM has no prior context
+  // ("you forgot the topic" bug). Idempotent — only the first call per
+  // function instance does real work.
+  await ensureLanceDBReady().catch(() => {});
 
   const encoder = new TextEncoder();
   const abortCtrl = new AbortController();

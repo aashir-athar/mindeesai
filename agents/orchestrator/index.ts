@@ -380,7 +380,11 @@ export async function* orchestrate(opts: {
   });
 
   const tools = await listTools();
-  const history: Message[] = [...thread, userTurn].slice(-13);
+  // `thread` was read AFTER appendMessage(userTurn) on line ~107, so it
+  // already contains the current user turn. Don't spread userTurn again
+  // — that would duplicate it in the LLM context, which the model reads
+  // as 'the user repeated themselves'. Slice the last 13 messages.
+  const history: Message[] = thread.slice(-13);
 
   // 7. Decide which brain serves this turn — native vs cloud bootstrap.
   //    The native model needs BOTH the runtime flag AND a checkpoint that has
