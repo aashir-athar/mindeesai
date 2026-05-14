@@ -54,6 +54,7 @@ type GoalSnapshot = { goal: string; confidence: number } | null;
 
 export function ChatCanvas({ threadId }: { threadId: string }) {
   const [exchanges, setExchanges] = useState<Exchange[]>([]);
+  const [hydrated, setHydrated] = useState(false);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [stage, setStage] = useState<string>("");
@@ -62,6 +63,35 @@ export function ChatCanvas({ threadId }: { threadId: string }) {
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // On mount: pull existing thread messages from the server and pair them
+  // into Exchange shapes. Refreshing the browser used to drop the visible
+  // history even though the server still had the transcript on disk and
+  // in Blob. This restores the rendered conversation on every load.
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const res = await fetch(`/api/threads/${encodeURIComponent(threadId)}`, { cache: "no-store" });
+        if (!res.ok) { if (alive) setHydrated(true); return; }
+        const data = (await res.json()) as {
+          messages?: Array<{ id: string; role: string; content: string; citations?: Citation[]; createdAt?: string }>;
+        };
+        if (!alive) return;
+        const restored = messagesToExchanges(data.messages ?? []);
+        setExchanges(restored);
+        setHydrated(true);
+        // Scroll to bottom of restored history after the next paint
+        requestAnimationFrame(() => {
+          const el = scrollRef.current;
+          if (el) el.scrollTo({ top: el.scrollHeight, behavior: "auto" });
+        });
+      } catch {
+        if (alive) setHydrated(true);
+      }
+    })();
+    return () => { alive = false; };
+  }, [threadId]);
 
   // Mood + goal polling — same logic as before, every 30s + on exchange complete.
   useEffect(() => {
@@ -253,7 +283,11 @@ export function ChatCanvas({ threadId }: { threadId: string }) {
       {/* ─── Vertical message column ─────────────────────────────────── */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto">
         <div className="max-w-3xl mx-auto px-4 sm:px-6 py-10 sm:py-16">
-          {exchanges.length === 0 ? (
+          {!hydrated ? (
+            // While we're fetching the existing thread, show nothing — don't
+            // flash the empty state and then suddenly fill in old messages.
+            <div className="h-0" aria-hidden />
+          ) : exchanges.length === 0 ? (
             <EmptyState onSelect={(s) => setInput(s)} />
           ) : (
             <div className="flex flex-col gap-12">
@@ -432,6 +466,42 @@ function EmptyState({ onSelect }: { onSelect: (s: string) => void }) {
       </div>
     </div>
   );
+}
+
+// ─── Helpers ───────────────────────────────────────────────────────────────
+
+/**
+ * Pair messages from the server (user / assistant / tool, in order)
+ * into the Exchange shape the chat-canvas renders. Each user message
+ * starts a new exchange; the following assistant message fills its
+ * answer. Tool messages are ignored on restore (their citations already
+ * flow with the assistant message that consumed them).
+ */
+function messagesToExchanges(
+  msgs: Array<{ id: string; role: string; content: string; citations?: Citation[]; createdAt?: string }>,
+): Exchange[] {
+  const out: Exchange[] = [];
+  let pending: Exchange | null = null;
+  for (const m of msgs) {
+    if (m.role === "user") {
+      if (pending) out.push(pending);
+      pending = {
+        id: m.id,
+        question: m.content,
+        answer: "",
+        citations: [],
+        toolActivity: [],
+      };
+    } else if (m.role === "assistant" && pending) {
+      pending.answer = m.content;
+      pending.citations = m.citations ?? [];
+      out.push(pending);
+      pending = null;
+    }
+    // tool messages are skipped on restore
+  }
+  if (pending) out.push(pending);
+  return out;
 }
 
 // ─── Auxiliary components ─────────────────────────────────────────────────
