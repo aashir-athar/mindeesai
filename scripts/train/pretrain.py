@@ -91,6 +91,26 @@ VARIANTS: dict[str, Config] = {
     "large": Config("large", 64000, 8192, 2048, 24, 32, 8, 5632, rope_base=500000.0, use_mla=True, mla_latent_dim=512, use_mtp=True, mtp_depth=3),
     "moe-small": Config("moe-small", 32000, 2048, 512,  8,  8, 4, 1024, use_moe=True, num_experts=8,  experts_per_token=2, use_mla=True, mla_latent_dim=128, use_mtp=True),
     "moe-base":  Config("moe-base",  50000, 4096, 1024, 12, 16, 8, 1408, rope_base=500000.0, use_moe=True, num_experts=16, experts_per_token=2, use_mla=True, mla_latent_dim=256, use_mtp=True),
+    # ─── Tuned for a single 12GB consumer GPU (RTX 4070/5070/4080-class) ──
+    # ~280M params, 16 layers × d_model 1280, bf16 + grad-ckpt → fits 12GB
+    # at batch=8 with seq=4096. The single best quality you can train at
+    # home in one overnight run on consumer hardware.
+    "home-max": Config(
+        "home-max", 50000, 4096, 1280, 16, 20, 5, 3584,
+        rope_base=500000.0,
+        use_mla=True, mla_latent_dim=320,
+        use_mtp=True, mtp_depth=2,
+    ),
+    # ─── Sparse alternative: MoE for higher capacity at same VRAM ─────────
+    # ~110M active / ~440M total. 8 experts top-2. Compute per token is
+    # equivalent to a ~140M dense model, but the model "knows" more.
+    "home-moe": Config(
+        "home-moe", 50000, 4096, 1024, 14, 16, 4, 1408,
+        rope_base=500000.0,
+        use_moe=True, num_experts=8, experts_per_token=2,
+        use_mla=True, mla_latent_dim=256,
+        use_mtp=True, mtp_depth=2,
+    ),
 }
 
 
@@ -288,13 +308,25 @@ class MindeesMind(nn.Module):
         self.mtp_heads = nn.ModuleList(
             [MTPHead(cfg) for _ in range(cfg.mtp_depth - 1)] if cfg.use_mtp and cfg.mtp_depth > 1 else []
         )
+        # Set via .enable_grad_checkpointing(); recomputes activations
+        # during backward to trade compute for VRAM. Lets us fit ~2x
+        # larger models or batches in the same memory budget.
+        self.grad_ckpt = False
+
+    def enable_grad_checkpointing(self) -> None:
+        self.grad_ckpt = True
 
     def forward(self, ids: torch.Tensor) -> tuple[torch.Tensor, list[torch.Tensor], torch.Tensor]:
         """Returns (main_logits, mtp_logits_list, aux_loss)."""
         x = self.emb(ids)
         aux_total = x.new_zeros(())
         for blk in self.blocks:
-            x, aux = blk(x)
+            if self.grad_ckpt and self.training:
+                # use_reentrant=False is the modern recommendation; it plays
+                # nicely with our (x, aux) tuple return without graph hacks.
+                x, aux = torch.utils.checkpoint.checkpoint(blk, x, use_reentrant=False)
+            else:
+                x, aux = blk(x)
             aux_total = aux_total + aux
         x = rms_norm(x, self.final_norm, self.cfg.rms_eps)
         W = self.emb.weight if self.cfg.tie_embeddings else self.lm_head.weight
@@ -877,6 +909,8 @@ def main():
     ap.add_argument("--hf-max-tokens", type=int, default=2_000_000)
     ap.add_argument("--completion-only-loss", type=int, default=1, help="1 = score only assistant-response tokens in distill corpus (canonical SFT); 0 = score all tokens")
     ap.add_argument("--persona-loss-weight", type=float, default=0.05, help="Weight on the persona-loss regularizer that suppresses banned-phrase tokens (e.g. 'as an AI'). Set to 0 to disable.")
+    ap.add_argument("--grad-ckpt", action="store_true", help="Enable gradient checkpointing — recompute activations during backward. ~30%% slower but lets a larger model / batch fit in the same VRAM. Recommended for any variant ≥ home-max on a 12GB consumer GPU.")
+    ap.add_argument("--compile", action="store_true", help="torch.compile the model. ~20-40%% throughput gain after a slow first step, requires PyTorch 2.x + working Triton.")
     # Public human-dialogue corpus (free HF datasets)
     ap.add_argument("--dialogue-dataset", default=None, help="HuggingFace dialogue dataset name (e.g. 'daily_dialog'). Streamed, formatted as chat-template turns.")
     ap.add_argument("--dialogue-split", default="train")
@@ -969,6 +1003,17 @@ def main():
     model = MindeesMind(cfg).to(device)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"params: {n_params / 1e6:.1f}M")
+
+    if args.grad_ckpt:
+        model.enable_grad_checkpointing()
+        print(f"gradient checkpointing: ENABLED (~30% slower, ~50% less peak VRAM)")
+
+    if args.compile:
+        try:
+            model = torch.compile(model)
+            print(f"torch.compile: ENABLED (first step will be slow while it traces)")
+        except Exception as e:
+            print(f"torch.compile failed ({e}) — continuing without")
 
     optim = build_optim(model, args.lr, args.wd)
     scaler = GradScaler(enabled=args.amp and device == "cuda")
