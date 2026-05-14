@@ -28,7 +28,7 @@ import {
 } from "@/lib/memory";
 import { persistPersonaQuick } from "@/lib/memory/persistence";
 import { appendDistillRow } from "@/lib/memory/distill-corpus";
-import { extractRegexTriples, extractSelfTriples } from "@/lib/memory/regex-triples";
+import { extractRegexTriples, extractSelfTriples, extractNERTriples } from "@/lib/memory/regex-triples";
 import { addTriples } from "@/lib/memory/graph";
 import { studyTopic } from "@/lib/persona/skill-mastery";
 import { touchMeta, getMeta } from "@/lib/threads/metadata";
@@ -66,7 +66,7 @@ import { updateRhythm } from "@/lib/persona/rhythm";
 import { recordInnerThought } from "@/lib/persona/inner-voice";
 import { bumpAffinity, readAffinities, engagementFromTurn } from "@/lib/persona/topic-affinity";
 import { readReachOut, reachOutNarrative } from "@/lib/persona/reach-out";
-import { readNeuralEmotion, blendNeuralIntoCues } from "@/lib/persona/affect-neural";
+import { readNeuralEmotion, readNeuralSentiment, readToxicity, blendAllNeuralIntoCues } from "@/lib/persona/affect-neural";
 import { detectDelight, recordDelight, callbackableDelights } from "@/lib/persona/delights";
 import { neighbours } from "@/lib/memory/graph";
 import { isoNow, nid } from "@/lib/utils";
@@ -106,28 +106,57 @@ export async function* orchestrate(opts: {
   };
   await appendMessage(threadId, userTurn);
 
-  // 1b. Regex-triple extraction — synchronous self-disclosure capture.
-  //     Runs on EVERY user message, zero LLM cost. Lands triples into
-  //     graph.json (which the LLM-based extractor in step 8 will later
-  //     supplement). This is the loop that actually grows the
-  //     /memory-graph page from "2 triples" to "real knowledge base."
+  // 1b. Triple extraction — TWO synchronous-ish passes that grow the
+  //     knowledge graph on every user message at zero LLM cost:
+  //
+  //     - regex patterns (instant, deterministic): "I work at X", "I'm
+  //       from Y", "I love Z", etc. 35+ patterns mapping to fixed
+  //       predicates.
+  //     - NER via transformers.js bert-base-NER (lazy-loaded, ~100ms
+  //       steady-state): catches PERSON / LOC / ORG / MISC entities the
+  //       regex misses ("met Sarah at the Karachi office").
+  //
+  //     Both run fire-and-forget so they don't slow the chat path.
+  //     The LLM-based extractor in step 8 still runs post-reply and
+  //     supplements with relational facts neither of these capture.
   void (async () => {
     const triples = extractRegexTriples(userMessage);
     if (triples.length > 0) {
       await addTriples(triples).catch((e) => log.warn("regex triples persist failed", e));
     }
   })();
+  void (async () => {
+    const triples = await extractNERTriples(userMessage);
+    if (triples.length > 0) {
+      await addTriples(triples).catch((e) => log.warn("ner triples persist failed", e));
+    }
+  })();
 
   // 2. Read affect + empathy → update all per-turn tensors in parallel.
-  //    Affect is the rule-based read; we ALSO try a neural read (transformers.js,
-  //    Xenova/emotion-english-distilroberta-base) and blend it in. Neural is
-  //    bounded by a 2.5s timeout and falls back silently to rule-based-only
-  //    so cold serverless can't stall the chat path.
+  //    Affect is the rule-based read; we ALSO try THREE neural reads
+  //    (emotion 7-class + Twitter-sentiment 3-class + toxicity) and blend
+  //    them in. All three lazy-load via the transformers-pool and time out
+  //    in 2-2.5s, falling back silently so cold serverless can't stall
+  //    the chat path. The sentiment model catches sarcasm cases the
+  //    emotion model misses (Twitter training data is ironic). The
+  //    toxicity model lets us bias toward LISTENING register when the
+  //    user is being harsh — and lets a future post-stream guard catch
+  //    toxic assistant output before it reaches the user.
   const affectRule = readAffect(userMessage);
-  const neuralEmotion = await readNeuralEmotion(userMessage).catch(() => null);
-  const affect = neuralEmotion
-    ? { ...affectRule, cues: blendNeuralIntoCues(affectRule.cues, neuralEmotion) }
+  const [neuralEmotion, neuralSentiment, toxicity] = await Promise.all([
+    readNeuralEmotion(userMessage).catch(() => null),
+    readNeuralSentiment(userMessage).catch(() => null),
+    readToxicity(userMessage).catch(() => null),
+  ]);
+  const affect = (neuralEmotion || neuralSentiment)
+    ? { ...affectRule, cues: blendAllNeuralIntoCues(affectRule.cues, neuralEmotion, neuralSentiment) }
     : affectRule;
+  // If the user message is toxic, bump frustration baseline so empathy
+  // routes to listening register and Mindees doesn't escalate.
+  if (toxicity?.flagged) {
+    affect.cues.frustration = Math.min(1, affect.cues.frustration + 0.25);
+    log.info(`user message flagged toxic (${toxicity.score.toFixed(2)}); biasing toward listening register`);
+  }
   const empathy = readEmpathy(userMessage, affect);
   const [mood, userModelPrev, relPrev, goal] = await Promise.all([
     updateMood(affect),

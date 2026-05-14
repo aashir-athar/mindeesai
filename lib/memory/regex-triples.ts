@@ -116,6 +116,74 @@ function makeTriple(subject: string, predicate: string, rawObject: string | unde
 }
 
 /**
+ * NER-based entity extraction — augments the regex patterns with whatever
+ * a real transformers.js NER model identifies as PERSON / LOC / ORG / MISC.
+ *
+ * Catches the case where the user mentions an entity in a sentence shape
+ * the regex doesn't recognise — "I met Sarah at the Karachi office last
+ * week" doesn't match any of the regex patterns above, but NER picks up
+ * Sarah (PER) and Karachi (LOC).
+ *
+ * Lazy-loaded; never throws; returns [] on failure.
+ */
+export async function extractNERTriples(text: string): Promise<Triple[]> {
+  if (!text || text.length > 4000) return [];
+  try {
+    const { nerPipeline } = await import("@/lib/ml/transformers-pool");
+    const ner = await nerPipeline();
+    if (!ner) return [];
+    const result = (await ner(text.slice(0, 1024))) as unknown;
+    if (!Array.isArray(result)) return [];
+    type NerToken = { entity?: string; entity_group?: string; word: string; score: number };
+    const tokens = result as NerToken[];
+    // transformers.js bert-base-NER returns BIO-tagged tokens — we
+    // collapse consecutive B-X / I-X tokens into single spans.
+    const spans: Array<{ type: string; text: string; score: number }> = [];
+    let cur: { type: string; text: string; score: number } | null = null;
+    for (const t of tokens) {
+      const tag = t.entity_group ?? t.entity ?? "";
+      const m = tag.match(/^[BI]-(\w+)/);
+      if (!m) continue;
+      const type = m[1] ?? "";
+      const isContinuation = tag.startsWith("I-");
+      // Many tokenizers emit subword pieces like "##er" or "Ġfoo" — heuristically
+      // join them onto the previous span instead of treating as new tokens.
+      const isSubword = t.word.startsWith("##") || t.word.startsWith("Ġ");
+      if (cur && cur.type === type && (isContinuation || isSubword)) {
+        cur.text += t.word.startsWith("##") ? t.word.slice(2) : ` ${t.word}`;
+        cur.score = Math.min(cur.score, t.score);
+      } else {
+        if (cur) spans.push(cur);
+        cur = { type, text: t.word, score: t.score };
+      }
+    }
+    if (cur) spans.push(cur);
+
+    const PREDICATE: Record<string, string> = {
+      PER: "knows",
+      LOC: "mentioned_place",
+      ORG: "mentioned_org",
+      MISC: "mentioned",
+    };
+    const out: Triple[] = [];
+    const seen = new Set<string>();
+    for (const s of spans) {
+      if (s.score < 0.85) continue; // high-confidence only
+      const obj = trim(s.text);
+      if (!obj || obj.length < 2) continue;
+      const predicate = PREDICATE[s.type] ?? "mentioned";
+      const key = `you|${predicate}|${obj.toLowerCase()}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ subject: "you", predicate, object: obj, source: "ner", createdAt: now() });
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+/**
  * Extract canonical self-disclosure triples from a user message.
  * Pure function — no I/O. Caller persists via addTriples().
  */
