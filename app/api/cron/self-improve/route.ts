@@ -33,6 +33,7 @@ import { research } from "@/lib/research";
 import { setResearching, clearResearching } from "@/lib/research/status";
 import { maybeWriteJournalEntry } from "@/lib/persona/journal";
 import { composeReachOut } from "@/lib/persona/reach-out";
+import { maybeRunSleepCycle } from "@/lib/memory/sleep-cycle";
 
 export const runtime = "nodejs";
 export const maxDuration = 280; // up to ~5min on Vercel Pro; cron-job.org honours this
@@ -211,6 +212,17 @@ export async function POST(req: NextRequest) {
       await composeReachOut();
     } catch (e) {
       log.warn("reach-out compose failed", e);
+    }
+
+    // 4c. Sleep-cycle consolidation — once per ~22h, lift recurring topics
+    //     across reflections + corrections + delights + affinities into
+    //     consolidated semantic insights in LanceDB. Zero LLM cost (pure
+    //     aggregation). Internally gated to interval so it's safe to call
+    //     every tick — no-ops 99% of the time.
+    try {
+      if (remainingMs() > 3_000) await maybeRunSleepCycle();
+    } catch (e) {
+      log.warn("sleep-cycle failed", e);
     }
 
     // 5. Final heartbeat + flush. Mark success so /api/health sees it.
