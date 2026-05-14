@@ -19,6 +19,13 @@ import { createLogger } from "@/lib/logger";
 
 const log = createLogger("openai-compat");
 
+/** Typed provider error so the router can detect rate limits and walk the fallback chain. */
+export class ProviderError extends Error {
+  status?: number;
+  provider?: string;
+  isRateLimit?: boolean;
+}
+
 function toOpenAIMessages(messages: Message[], system?: string) {
   const out: Array<Record<string, unknown>> = [];
   if (system) out.push({ role: "system", content: system });
@@ -80,12 +87,17 @@ export async function* streamOpenAICompatible(
 
   if (!res.ok || !res.body) {
     const detail = await res.text().catch(() => "");
-    yield {
-      type: "text",
-      text: `[${opts.label} error: ${res.status} ${res.statusText}${detail ? ` — ${detail.slice(0, 200)}` : ""}]`,
-    };
-    yield { type: "finish" };
-    return;
+    // THROW instead of yielding the raw error text — the router catches
+    // 429/5xx and walks the fallback chain to keep the chat alive.
+    // The pre-Phase-fix behaviour leaked raw provider error JSON into the
+    // user-visible reply, which broke the persona AND wasn't actionable.
+    const err = new ProviderError(`${opts.label} ${res.status} ${res.statusText} — ${detail.slice(0, 400)}`);
+    err.status = res.status;
+    err.provider = opts.label;
+    err.isRateLimit = res.status === 429 ||
+      detail.includes("rate limit") || detail.includes("rate_limit") ||
+      detail.includes("Rate limit") || detail.includes("Too Many Requests");
+    throw err;
   }
 
   const reader = res.body.getReader();

@@ -95,13 +95,108 @@ function defaultCloudModel(pid: ProviderId): string {
   }
 }
 
+/**
+ * Free-tier fallback chain.
+ *
+ * Each entry is tried in order. On 429 (rate limit) or transient 5xx the
+ * router immediately moves to the next entry. Each Groq model has its
+ * OWN per-day token quota, so we get effective ~4× the daily budget by
+ * cycling between them. Google Gemini Flash has a generous separate
+ * free tier (15 RPM / 1500 RPD) and uses no Groq quota.
+ *
+ * Order matters: highest-quality model first when its quota is healthy,
+ * smaller / different-quota models as fallbacks. Last resort is the
+ * Mindees graceful-degradation message so the chat never crashes raw.
+ */
+type FallbackEntry = { provider: ProviderId; model: string };
+const FREE_FALLBACK_CHAIN: FallbackEntry[] = [
+  { provider: "groq",   model: "llama-3.3-70b-versatile" },      // primary
+  { provider: "groq",   model: "llama-3.1-8b-instant" },         // separate Groq quota
+  { provider: "groq",   model: "openai/gpt-oss-120b" },          // separate Groq quota
+  { provider: "groq",   model: "openai/gpt-oss-20b" },           // separate Groq quota
+  { provider: "groq",   model: "gemma2-9b-it" },                 // separate Groq quota
+  { provider: "google", model: "gemini-2.5-flash" },             // free tier 15 RPM / 1500 RPD
+  { provider: "google", model: "gemini-2.0-flash" },             // older free model
+];
+
+/** Build the routing chain for THIS request. */
+function buildAttempts(req: LLMRequest): FallbackEntry[] {
+  const explicit = providerFromModelId(req.modelId);
+  if (explicit) {
+    // User pinned a specific provider — try it first, then fall through to chain
+    const bare = bareModelId(req.modelId)!;
+    return [{ provider: explicit, model: bare }, ...FREE_FALLBACK_CHAIN.filter((f) => f.provider !== explicit || f.model !== bare)];
+  }
+  return FREE_FALLBACK_CHAIN.filter((f) => PROVIDERS[f.provider].isAvailable());
+}
+
+/** Recognise errors that mean "try the next provider/model". */
+function shouldFailover(e: unknown): boolean {
+  if (!e || typeof e !== "object") return false;
+  const err = e as { isRateLimit?: boolean; status?: number; message?: string };
+  if (err.isRateLimit) return true;
+  if (err.status === 429) return true;
+  if (err.status && err.status >= 500 && err.status < 600) return true; // server errors
+  const msg = String(err.message || "");
+  return /rate.?limit|too many requests|quota|tokens per day|TPD/i.test(msg);
+}
+
 /** Single entrypoint used by the orchestrator. */
 export async function* streamLLM(req: LLMRequest): AsyncIterable<LLMStreamChunk> {
-  const { provider, modelId } = await pickProvider(req);
-  log.debug(`stream → ${provider.id}/${modelId}`);
-  for await (const chunk of provider.stream({ ...req, modelId })) {
-    yield chunk;
+  const attempts = buildAttempts(req);
+
+  // If chain is empty (no cloud key, no Ollama), use the original pickProvider
+  // path which surfaces the friendly "no provider configured" message.
+  if (attempts.length === 0) {
+    const { provider, modelId } = await pickProvider(req);
+    for await (const chunk of provider.stream({ ...req, modelId })) yield chunk;
+    return;
   }
+
+  let lastError: unknown = null;
+  for (let i = 0; i < attempts.length; i++) {
+    const { provider: pid, model } = attempts[i]!;
+    const provider = PROVIDERS[pid];
+    if (!provider.isAvailable()) continue;
+    log.info(`stream attempt ${i + 1}/${attempts.length} → ${pid}/${model}`);
+
+    let yieldedAny = false;
+    try {
+      for await (const chunk of provider.stream({ ...req, modelId: model })) {
+        yieldedAny = true;
+        yield chunk;
+      }
+      return; // success — chain complete
+    } catch (e) {
+      lastError = e;
+      const failover = shouldFailover(e);
+      log.warn(`${pid}/${model} failed${yieldedAny ? " mid-stream" : ""}${failover ? " (rate-limited, trying next)" : ""}`, e);
+      if (yieldedAny || !failover) {
+        // Either we already committed text to the user OR it's not a failover-worthy
+        // error. Either way, surface a graceful end and stop.
+        if (!yieldedAny) {
+          yield {
+            type: "text",
+            text: "Something's off on the model side right now — give me a moment and try again.",
+          };
+        }
+        yield { type: "finish" };
+        return;
+      }
+      // Otherwise loop to the next attempt.
+    }
+  }
+
+  // Exhausted the chain. Yield a Mindees-voice graceful message.
+  log.error("all fallback providers exhausted", lastError);
+  yield {
+    type: "text",
+    text:
+      "I'm hitting rate limits on every backend I have right now. " +
+      "The daily token quotas reset on a rolling 24h window — try again in a bit, " +
+      "or flip USE_NATIVE_MODEL on /admin if there's a checkpoint loaded.",
+  };
+  yield { type: "finish" };
 }
 
 const noProviderStub: LLMProvider = {
