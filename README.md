@@ -151,7 +151,15 @@ The whole self-improvement-loop narrative depends on the user being able to veri
 
 ### Zero-config self-learning loop
 
-When deployed to Vercel with a Blob store attached, **no other configuration is required**. `MEMORY_PERSISTENCE` auto-detects to `vercel-blob` when `BLOB_READ_WRITE_TOKEN` is present. Every chat turn auto-persists to Blob (including the conversation transcript, so follow-up questions on a different serverless instance still have full thread context). Audit pages hydrate from Blob on cold start. The cron tick is budget-aware: **40s on Vercel Hobby** (fits the 60s function ceiling), **10-minute unbounded locally** for full pipeline runs.
+Storage split into the right layers for free-tier sustainability:
+
+- **HuggingFace Hub** — the trained checkpoint (`base.bin`). Unlimited free public-model storage, $0 egress, cold-start downloads cached to `/tmp`.
+- **Cloudflare R2** — runtime state (LanceDB vector store + persona tensors + conversations + journals). Free tier: 10 GB storage, **1M writes/mo, 10M reads/mo, $0 egress forever**. Set four R2 env vars on Vercel and `MEMORY_PERSISTENCE` auto-detects to `cloudflare-r2` — no further config.
+- **Vercel** — chat + audit API surface only. Hobby's 100 GB-hours/mo of function compute is preserved for actual user traffic.
+
+Every chat turn auto-persists to R2 (including the conversation transcript, so follow-up questions on a different serverless instance still have full thread context). Audit pages hydrate from R2 on cold start. The cron tick is budget-aware: **40s on Vercel Hobby** (fits the 60s function ceiling), **10-minute unbounded locally** for full pipeline runs.
+
+*Why not Vercel Blob:* Hobby caps writes at **2,000/month** — a 5-min cron walking 30+ files burns that in under 3 hours. The persistence layer still supports `vercel-blob` mode (set `BLOB_READ_WRITE_TOKEN`) for low-frequency use, with a circuit-breaker that trips on `store suspended` so a quota wall can't burn dev-server wall-clock on doomed PUTs.
 
 Triggers:
 - **chat path** — every user message gets 35+ regex-extracted self-disclosure triples added to the graph synchronously, plus a transformers.js NER pass for entities the regex misses, plus an LLM-extracted supplement post-reply.
@@ -194,7 +202,7 @@ You can deploy Mindees with **zero API keys** and every autonomous-research path
 ### The full self-learning feedback loop
 
 ```
-chat turn  →  data/distill-corpus.jsonl + conversations/  →  Vercel Blob
+chat turn  →  data/distill-corpus.jsonl + conversations/  →  Cloudflare R2
                             │
               ┌─────────────┴─────────────────────────┐
               ▼                                       ▼
@@ -205,17 +213,18 @@ chat turn  →  data/distill-corpus.jsonl + conversations/  →  Vercel Blob
       journal entry,                           MixedSampler weights base+distill
       sleep-cycle consolidation,               +dialogue+TinyStories,
       reach-out compose,                       completion-only SFT loss,
-      Blob flush)                              persona-loss regularizer,
+      R2 flush)                                persona-loss regularizer,
               │                                thumb-filtered RLHF-lite)
               │                                       │
               │                              checkpoints/base.bin
               │                                       │
               │                                       ▼
-              │                              uploaded to Vercel Blob
+              │                              pushed to HuggingFace Hub
+              │                              (aashir-athar/mindeesai-base)
               │                                       │
               └─────────────────┬─────────────────────┘
                                 ▼
-                       next cold-start hydrates new weights
+                       next cold-start fetches base.bin from HF → /tmp cache
                                 ▼
                     /admin → flip USE_NATIVE_MODEL on
                                 ▼
@@ -229,7 +238,7 @@ The 5-min cron used to also run a CPU gradient step (`selfImproveTick`) but that
 - **`scripts/train/run-home-max.ps1`** — local GPU run on consumer hardware (tuned for RTX 5070 12GB at bf16 with gradient checkpointing). `home-max` variant (~349M params) trains in ~4 hours overnight.
 - **`.github/workflows/pretrain.yml`** — free CPU on GitHub Actions, ~30 min, runs weekly + manual dispatch.
 
-Both upload `checkpoints/base.bin` to Vercel Blob. Cold-start hydration pulls it down. Flip the toggle on `/admin` and the chat runs on YOUR weights.
+Both upload `checkpoints/base.bin` to **HuggingFace Hub** (`aashir-athar/mindeesai-base`) via `python scripts/upload_to_hf.py`. The deployed Vercel function fetches the latest revision from HF on cold start, caches to `/tmp/checkpoints/base.bin`, and serves inference from your trained weights for the rest of that function instance's lifetime. Flip the toggle on `/admin` and the chat runs on YOUR weights.
 
 ---
 
@@ -308,7 +317,8 @@ Both upload `checkpoints/base.bin` to Vercel Blob. Cold-start hydration pulls it
 | Cron | **cron-job.org (5-min) + Vercel Cron (daily fallback)** | Free 1-minute granularity from cron-job.org; Vercel's daily cron as belt-and-braces. |
 | LLM router | **7-deep free-tier fallback chain** | Auto-walks on 429 / 5xx / stream stalls. Effective daily budget: 5× Groq TPD + Gemini Flash. |
 | Deployment | **Vercel Hobby (free)** | Push-to-deploy. Heavy training on free GitHub Actions CPU or local GPU. |
-| Persistence | **Vercel Blob auto-detect** | `MEMORY_PERSISTENCE` auto-flips to `vercel-blob` when `BLOB_READ_WRITE_TOKEN` is present + `VERCEL=1`. No manual config. |
+| Checkpoint storage | **HuggingFace Hub** | `aashir-athar/mindeesai-base`. Unlimited free public storage, $0 egress; cold-start downloader caches `base.bin` to `/tmp`. |
+| Runtime persistence | **Cloudflare R2 (S3-compat)** | 10 GB / 1M writes / 10M reads per month free, **$0 egress forever**. `MEMORY_PERSISTENCE` auto-detects `cloudflare-r2` when R2 env vars are present; falls back to `vercel-blob` or `local`. Pure-Node SigV4 implementation — no SDK dependency. |
 
 ---
 
@@ -470,12 +480,32 @@ The Deploy button does **everything in one go**:
 
 1. Clones this repo into your GitHub account.
 2. Provisions a new Vercel project with the right framework preset, install command, and build command.
-3. Provisions a **Vercel Blob store** for persistent vector memory (LanceDB snapshots).
-4. Prompts you for `CRON_SECRET`, `TAVILY_API_KEY`, and `FIRECRAWL_API_KEY` — only `CRON_SECRET` is mandatory.
-5. Registers the **`/api/cron/self-improve` Vercel Cron job** at the `*/5 * * * *` (every-5-minutes) schedule.
-6. Pins serverless function memory and timeouts (300s for the cron, 60s for chat, 120s for benchmark) via [`vercel.json`](vercel.json).
+3. Prompts you for `CRON_SECRET`, `TAVILY_API_KEY`, and `FIRECRAWL_API_KEY` — only `CRON_SECRET` is mandatory.
+4. Registers the daily Vercel Cron job for `/api/cron/self-improve` (Hobby plan = 1/day max). Pair it with [cron-job.org](https://cron-job.org) at 5–15-min intervals for the real self-improvement cadence.
+5. Pins serverless function memory and timeouts (60s for chat + cron, 30s for connectors) via [`vercel.json`](vercel.json).
 
-After the deploy completes, visit `https://<your-project>.vercel.app`, and your model is live. The first `/api/cron/self-improve` tick fires within 5 minutes; you can verify by hitting `/api/health` and watching the `lastTrainingTick` field populate.
+After the deploy completes, add storage for runtime state. Two free-tier options:
+
+- **Recommended — Cloudflare R2** (10 GB / 1M writes / 10M reads / mo, $0 egress):
+  1. https://dash.cloudflare.com → R2 → Create bucket (e.g. `mindeesai`).
+  2. R2 → Manage R2 API Tokens → Create → Object Read & Write.
+  3. Add four env vars on Vercel: `R2_ACCOUNT_ID`, `R2_BUCKET`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`.
+  4. Redeploy. `MEMORY_PERSISTENCE` auto-detects `cloudflare-r2`.
+
+- **Alternative — Vercel Blob** (1 GB / **2k writes/mo on Hobby — quota burns fast**):
+  - Storage → Blob → Connect Store. `BLOB_READ_WRITE_TOKEN` is auto-injected.
+  - Acceptable for low-traffic dev, NOT recommended for an active cron loop.
+
+Then push your trained checkpoint to HuggingFace:
+
+```bash
+pip install huggingface_hub
+huggingface-cli login
+python scripts/upload_to_hf.py
+# → uploads checkpoints/base.bin → aashir-athar/mindeesai-base
+```
+
+Visit `https://<your-project>.vercel.app/chat`, and your model is live. The cold-start path fetches `base.bin` from HF, caches to `/tmp`, and serves inference from your trained weights for that function instance's lifetime.
 
 ### What's preconfigured in `vercel.json`
 
@@ -504,8 +534,10 @@ After the deploy completes, visit `https://<your-project>.vercel.app`, and your 
 |---|---|---|
 | `TAVILY_API_KEY` | The `web-search` connector | Yes — 1k searches/mo |
 | `FIRECRAWL_API_KEY` | The `web-crawl` connector | Yes |
-| `BLOB_READ_WRITE_TOKEN` | LanceDB snapshot persistence on Vercel | Auto-injected when you connect a Blob store |
-| `MEMORY_PERSISTENCE` | Set to `vercel-blob` to enable Blob-backed persistence | n/a |
+| `R2_ACCOUNT_ID` + `R2_BUCKET` + `R2_ACCESS_KEY_ID` + `R2_SECRET_ACCESS_KEY` | Cloudflare R2 runtime persistence (LanceDB + tensors + conversations) | Yes — 10 GB / 1M writes / 10M reads per month, $0 egress |
+| `HF_MODEL_REPO` | HuggingFace repo holding the trained checkpoint (default `aashir-athar/mindeesai-base`) | Yes — unlimited public-model storage |
+| `BLOB_READ_WRITE_TOKEN` | Fallback Vercel Blob persistence (NOT recommended — 2k writes/mo on Hobby) | Auto-injected when you connect a Blob store |
+| `MEMORY_PERSISTENCE` | Leave UNSET to auto-detect; set explicitly to `cloudflare-r2`/`vercel-blob`/`local` to override | n/a |
 
 **Optional** (one-time bootstrap only):
 
@@ -570,7 +602,8 @@ See [`docs/ROADMAP.md`](docs/ROADMAP.md) for the full version.
 - [x] Cross-thread memory recall
 - [x] Auto-promotion of frequently-recalled memories to insights
 - [x] /dashboard live state page (every tensor visible, auditable)
-- [x] Per-chat Vercel Blob persistence (state survives cold starts)
+- [x] Per-chat persistence (state survives cold starts) via Cloudflare R2 or Vercel Blob
+- [x] HuggingFace Hub checkpoint hosting with cold-start auto-download
 - [x] Runtime stripping of leaked Llama-3 `<function=…>` syntax
 - [ ] WebGPU kernels for matmul + softmax
 - [ ] Vision input (LLaVA / Florence-2)

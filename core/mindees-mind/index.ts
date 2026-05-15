@@ -69,9 +69,28 @@ async function init(): Promise<{ model: ModelWeights; tokenizer: BpeTokenizer; c
     log.warn("blob hydrate skipped/failed before checkpoint load", e);
   }
 
-  // Try to load the trained base.bin checkpoint. If present, this replaces
-  // the random initial weights with real trained ones — the moment the
-  // native model graduates from "random noise" to "actually learned".
+  // Ensure the trained checkpoint is on disk before we try to load it.
+  // On Vercel cold starts, /tmp/checkpoints is empty — we fetch from
+  // HuggingFace Hub (the canonical home for the trained model) and cache
+  // to /tmp/checkpoints/base.bin. Subsequent requests on the same function
+  // instance read directly from the cache.
+  //
+  // Locally, this is a no-op once you've run a training pass — the file
+  // already exists under ./checkpoints/.
+  try {
+    const { ensureCheckpoint } = await import("./model/hf-download");
+    const dl = await ensureCheckpoint();
+    if (!dl.ok) {
+      log.info(`checkpoint not available (${dl.reason ?? "unknown"}) — runtime will fall back to LLM router`);
+    } else if (dl.source === "hf") {
+      log.info(`✓ checkpoint fetched from HF: ${(dl.bytes / 1024 / 1024).toFixed(1)} MB`);
+    }
+  } catch (e) {
+    log.warn("hf checkpoint fetch failed", e);
+  }
+
+  // Now try to load the binary into the model. If hf-download succeeded
+  // above this reads from cache; if it failed, this no-ops cleanly.
   try {
     const { loadNativeCheckpoint } = await import("./model/load-checkpoint");
     const result = await loadNativeCheckpoint(model);

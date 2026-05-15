@@ -35,7 +35,6 @@
     }
   },
   "env": {
-    "MEMORY_PERSISTENCE": "vercel-blob",
     "LANCEDB_PATH": "/tmp/lancedb"
   },
   "headers": [
