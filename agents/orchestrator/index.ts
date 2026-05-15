@@ -479,9 +479,20 @@ export async function* orchestrate(opts: {
         }
       }
 
-      const content = result.ok
+      const rawContent = result.ok
         ? typeof result.output === "string" ? result.output : JSON.stringify(result.output)
         : `Error: ${result.error}`;
+      // Cap tool result content at ~12KB. A web-crawl or large search
+      // result can easily push 50KB+ into the next synthesis hop, which
+      // either tips the model into 400-error territory (gemma2-9b-it,
+      // llama-3.1-8b-instant have 8k contexts) or just makes synthesis
+      // sluggish. 12KB ≈ 3k tokens is comfortably below every backend's
+      // ceiling and still enough for the model to write a useful answer.
+      const TOOL_RESULT_CAP = 12_000;
+      const content = rawContent.length > TOOL_RESULT_CAP
+        ? rawContent.slice(0, TOOL_RESULT_CAP) +
+          `\n…[truncated ${rawContent.length - TOOL_RESULT_CAP} chars for context fit]`
+        : rawContent;
 
       conversation = [
         ...conversation,

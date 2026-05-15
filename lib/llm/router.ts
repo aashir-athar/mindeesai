@@ -130,17 +130,6 @@ function buildAttempts(req: LLMRequest): FallbackEntry[] {
   return FREE_FALLBACK_CHAIN.filter((f) => PROVIDERS[f.provider].isAvailable());
 }
 
-/** Recognise errors that mean "try the next provider/model". */
-function shouldFailover(e: unknown): boolean {
-  if (!e || typeof e !== "object") return false;
-  const err = e as { isRateLimit?: boolean; status?: number; message?: string };
-  if (err.isRateLimit) return true;
-  if (err.status === 429) return true;
-  if (err.status && err.status >= 500 && err.status < 600) return true; // server errors
-  const msg = String(err.message || "");
-  return /rate.?limit|too many requests|quota|tokens per day|TPD/i.test(msg);
-}
-
 /** Single entrypoint used by the orchestrator. */
 export async function* streamLLM(req: LLMRequest): AsyncIterable<LLMStreamChunk> {
   const attempts = buildAttempts(req);
@@ -163,38 +152,50 @@ export async function* streamLLM(req: LLMRequest): AsyncIterable<LLMStreamChunk>
     let yieldedAny = false;
     try {
       for await (const chunk of provider.stream({ ...req, modelId: model })) {
-        yieldedAny = true;
+        // Track whether we actually emitted a text chunk to the user.
+        // Tool-call and reasoning chunks don't count — the user hasn't
+        // seen them in the visible answer body, so switching providers
+        // is still safe.
+        if (chunk.type === "text" && chunk.text) yieldedAny = true;
         yield chunk;
       }
       return; // success — chain complete
     } catch (e) {
       lastError = e;
-      const failover = shouldFailover(e);
-      log.warn(`${pid}/${model} failed${yieldedAny ? " mid-stream" : ""}${failover ? " (rate-limited, trying next)" : ""}`, e);
-      if (yieldedAny || !failover) {
-        // Either we already committed text to the user OR it's not a failover-worthy
-        // error. Either way, surface a graceful end and stop.
-        if (!yieldedAny) {
-          yield {
-            type: "text",
-            text: "Something's off on the model side right now — give me a moment and try again.",
-          };
-        }
+      log.warn(`${pid}/${model} failed${yieldedAny ? " mid-stream" : ""}`, e);
+      if (yieldedAny) {
+        // We already committed text to the user — we can't safely switch
+        // to a different model mid-stream (would produce a Frankenstein
+        // reply). End the stream gracefully without injecting a new text
+        // chunk on top of what the user is already reading.
         yield { type: "finish" };
         return;
       }
-      // Otherwise loop to the next attempt.
+      // Nothing yielded yet — the user has nothing to lose. Walk to the
+      // next attempt regardless of the error category. The chain-exhausted
+      // path below will surface a graceful message if every backend fails.
     }
   }
 
-  // Exhausted the chain. Yield a Mindees-voice graceful message.
+  // Exhausted the chain. Pick the message based on what actually went wrong:
+  // a rate-limited last error gets the quota-reset hint; anything else gets a
+  // honest "the providers errored" line so we don't lie about quotas.
   log.error("all fallback providers exhausted", lastError);
+  const lastWasRateLimit = ((): boolean => {
+    if (!lastError || typeof lastError !== "object") return false;
+    const e = lastError as { isRateLimit?: boolean; status?: number; message?: string };
+    if (e.isRateLimit || e.status === 429) return true;
+    return /rate.?limit|too many requests|quota|tokens per day|TPD/i.test(String(e.message || ""));
+  })();
   yield {
     type: "text",
-    text:
-      "I'm hitting rate limits on every backend I have right now. " +
-      "The daily token quotas reset on a rolling 24h window — try again in a bit, " +
-      "or flip USE_NATIVE_MODEL on /admin if there's a checkpoint loaded.",
+    text: lastWasRateLimit
+      ? "I'm hitting rate limits on every backend I have right now. " +
+        "The daily token quotas reset on a rolling 24h window — try again in a bit, " +
+        "or flip USE_NATIVE_MODEL on /admin if there's a checkpoint loaded."
+      : "Every backend I tried just errored out on this one. " +
+        "Could be a transient hiccup or the tool result was too big to synthesise — " +
+        "try rephrasing or asking again in a moment.",
   };
   yield { type: "finish" };
 }
