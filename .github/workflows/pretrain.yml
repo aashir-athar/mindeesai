@@ -44,7 +44,7 @@ on:
       steps:
         description: 'Training steps per run. Default 1500 finishes in ~25 min on cpu_max_5h_50k variant. The 295m Python timeout is a safety ceiling — most runs complete well before it.'
         required: false
-        default: '1500'
+        default: '15000'
       batch:
         description: 'Batch size'
         required: false
@@ -309,7 +309,7 @@ jobs:
           MIND_VARIANT: ${{ github.event.inputs.variant || 'cpu_max_5h_50k' }}
         run: |
           VARIANT="${{ github.event.inputs.variant || 'cpu_max_5h_50k' }}"
-          STEPS="${{ github.event.inputs.steps || '1500' }}"
+          STEPS="${{ github.event.inputs.steps || '15000' }}"
           BATCH="${{ github.event.inputs.batch || '4' }}"
           RESUME_FLAG="${{ github.event.inputs.resume || 'true' }}"
           mkdir -p checkpoints data
