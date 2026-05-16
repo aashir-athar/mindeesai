@@ -19,9 +19,10 @@
 # Resume after a crash:
 #   .\scripts\train\run-home-max.ps1 -Resume
 #
-# After training completes, push to Vercel Blob:
-#   $env:BLOB_READ_WRITE_TOKEN = "vercel_blob_rw_..."
-#   python scripts/upload_checkpoint.py
+# After training completes, push to HuggingFace Hub:
+#   pip install huggingface_hub
+#   huggingface-cli login
+#   python scripts/upload_to_hf.py
 
 param(
     [switch]$Resume,
@@ -141,11 +142,13 @@ else:
     Write-Host "--- Training complete ---" -ForegroundColor Green
     Write-Host ""
     Write-Host "Next:"
-    Write-Host "  1. Set the Blob token (one-time per shell):"
-    Write-Host "       `$env:BLOB_READ_WRITE_TOKEN = 'vercel_blob_rw_...'"
-    Write-Host "  2. Upload to Vercel:"
-    Write-Host "       python scripts/upload_checkpoint.py"
+    Write-Host "  1. Install HuggingFace tooling + log in (one-time):"
+    Write-Host "       pip install huggingface_hub"
+    Write-Host "       huggingface-cli login"
+    Write-Host "  2. Push the checkpoint to HuggingFace Hub:"
+    Write-Host "       python scripts/upload_to_hf.py"
     Write-Host "  3. Visit any page on the deployed site to trigger a cold start"
+    Write-Host "       (cold-start path fetches base.bin from HF -> /tmp cache)"
     Write-Host "  4. Open /admin and flip USE_NATIVE_MODEL ON"
     Write-Host "  5. Your next chat runs on YOUR weights."
 }
