@@ -1,11 +1,7 @@
 <div align="center">
 
 <a href="https://github.com/aashir-athar/mindeesai">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/banner-dark.png">
-    <source media="(prefers-color-scheme: light)" srcset="assets/banner-light.png">
-    <img alt="MindeesAI — a native, self-training open-source AI" src="assets/banner.png" width="100%" />
-  </picture>
+  <img alt="MindeesAI logo" src="public/assets/mind-logo.png" width="160" height="160" />
 </a>
 
 # MindeesAI
@@ -235,10 +231,11 @@ chat turn  →  data/distill-corpus.jsonl + conversations/  →  Cloudflare R2
 
 The 5-min cron used to also run a CPU gradient step (`selfImproveTick`) but that was disabled by default after testing showed it could hang for 20+ minutes on rate-limited days. Heavy training has two proper homes:
 
-- **`scripts/train/run-home-max.ps1`** — local GPU run on consumer hardware (tuned for RTX 5070 12GB at bf16 with gradient checkpointing). `home-max` variant (~349M params) trains in ~4 hours overnight.
-- **`.github/workflows/pretrain.yml`** — free CPU on GitHub Actions, ~30 min, runs weekly + manual dispatch.
+- **`scripts/train/run-home-max.{sh,ps1}`** — local GPU run on consumer hardware. `home-max` variant (~349M params, 16L × 1280) for 12 GB cards; `home-11gb` variant (~280M params, 20L × 1024) for 11 GB usable budgets (RTX 5070 in WSL2). Trains in ~4-6 hours overnight at fp16 with gradient checkpointing.
+- **`.github/workflows/pretrain.yml`** — free CPU on GitHub Actions, ~30-60 min per run, fires every Sunday 03:00 UTC + manual dispatch. Reads the latest distill-corpus from Cloudflare R2, retrains a `small` variant against that fresh signal, and pushes the result to HuggingFace Hub as a **side revision** (`small-weekly` branch of `aashir-athar/mindeesai-base`) so it never overwrites the canonical `main` revision holding your local-GPU checkpoint.
+- **Multi-dataset training recipe** — `scripts/data/mix-broadbrain.json` describes a 6-dataset mix (code + math + reasoning + chat + narrative + instructions) feeding `pretrain.py --mix-config`. Each entry has `kind: raw | dialogue`, max_tokens cap, and sampling weight. Failed dataset loads are logged and skipped — one bad dataset can't kill an overnight run.
 
-Both upload `checkpoints/base.bin` to **HuggingFace Hub** (`aashir-athar/mindeesai-base`) via `python scripts/upload_to_hf.py`. The deployed Vercel function fetches the latest revision from HF on cold start, caches to `/tmp/checkpoints/base.bin`, and serves inference from your trained weights for the rest of that function instance's lifetime. Flip the toggle on `/admin` and the chat runs on YOUR weights.
+Both training paths upload `checkpoints/base.bin` to **HuggingFace Hub** (`aashir-athar/mindeesai-base`) via `python scripts/upload_to_hf.py`. The deployed Vercel function fetches the latest revision from HF on cold start, caches to `/tmp/checkpoints/base.bin`, and serves inference from your trained weights for the rest of that function instance's lifetime. Flip the toggle on `/admin` and the chat runs on YOUR weights.
 
 ---
 
@@ -276,16 +273,24 @@ Both upload `checkpoints/base.bin` to **HuggingFace Hub** (`aashir-athar/mindees
 - **Persistent vector memory** — LanceDB-backed semantic recall across every conversation, with a real cross-encoder reranker (`Xenova/ms-marco-MiniLM-L-12-v2`) on top of the bi-encoder embedder for precision lift.
 - **Autonomous web research** — Tavily / Exa / JINA / DuckDuckGo / Wikipedia / arXiv / Reddit / HackerNews — eight-deep provider chain, five of them key-less. Zero-config research even on a fresh fork.
 - **17 built-in connectors** — `calculator · code-exec · file-read · reflect · web-search · web-crawl · wikipedia · weather · datetime · github-search · stackoverflow · dictionary · hackernews · arxiv · pubmed · reddit · currency`. Add your own by dropping a folder under `/connectors`.
-- **4 local ML models** running via `@huggingface/transformers` (no GPU, no external API):
+- **9 local ML models** running via `@huggingface/transformers` (no GPU, no external API):
+  - `Xenova/bge-small-en-v1.5` — sentence embedder for LanceDB retrieval
+  - `Xenova/ms-marco-MiniLM-L-12-v2` — cross-encoder reranker on top of the embedder
   - `Xenova/emotion-english-distilroberta-base` — 7-class emotion classifier
   - `Xenova/twitter-roberta-base-sentiment-latest` — sarcasm-aware 3-class sentiment
   - `Xenova/bert-base-NER` — entity extraction (PER / LOC / ORG / MISC) for the knowledge graph
-  - `Xenova/toxic-bert` — toxicity classifier (defensive layer, biases empathy toward listening register)
-  - All Q8-quantised, lazy-loaded, ~430MB total worst case (well under Vercel Hobby 1GB function memory)
+  - `Xenova/toxic-bert` — toxicity classifier (biases empathy toward listening register on hostile turns)
+  - `Xenova/piiranha-v1-detect-personal-information` — **PII guard** (emails, phones, credit cards, SSNs, addresses) — redacts BEFORE the distill corpus crosses into public storage (R2 → GH Actions retrain → public HF revision)
+  - `Xenova/nli-deberta-v3-xsmall` — **zero-shot topic router** (code / math / personal / creative / factual / meta) — biases system prompt register without retraining
+  - `Xenova/distilbart-cnn-6-6` — **local thread summariser** — replaces the Groq call for rolling thread summaries, saves cloud quota
+  - All Q8-quantised, lazy-loaded, ~705 MB total worst case if every pipeline is resident simultaneously; in practice they fire on different timescales so peak concurrent memory is much lower
 - **Premium minimal UI** — Claude/Grok-style vertical chat, single `max-w-3xl` column on every page, slim sticky header, sticky bottom composer with auto-grow textarea, brain logo, consistent design language across every audit page.
 - **Server-streamed chat** — SSE with distinct event types for reasoning, text, citations, tool calls, replace-answer (leak-guard rewrite), and per-stage progress.
 - **Auditable improvement log** — every cron tick lands in append-only JSONL; roll back any tick.
 - **Defense-in-depth leak guard** — 15-pattern regex detector catches "as a conversational AI" / "I rely on publicly available information" disclaimers AND raw `<function=...>` tool-call markup. On hit, triggers a re-anchored regeneration. Final `sanitizeLeakedToolMarkup` strips any orphan markup unconditionally before the user sees the reply.
+- **PII guard before public storage** — every chat turn passes through `lib/persona/pii-guard.ts` before being appended to `data/distill-corpus.jsonl`. Hybrid ML (Piiranha) + regex pass redacts emails, phone numbers, credit cards, SSNs, addresses, IPs, IBANs into typed placeholders. Critical because the corpus eventually pushes to a **public** HF revision via the weekly retrain — without this guard, every PII the user types could be baked into open model weights.
+- **Zero-shot topic router** — `lib/persona/topic-router.ts` classifies every user message into {code · math · personal · creative · factual · meta} via `Xenova/nli-deberta-v3-xsmall`. When confident, splices a register/depth hint into the system prompt so coding questions get concrete examples + edge-case calls, personal turns lead with acknowledgement instead of solving, etc. Soft hint only — when uncertain, no prompt change.
+- **Local thread summariser** — `lib/threads/summary.ts` runs `Xenova/distilbart-cnn-6-6` as the PRIMARY path for rolling thread summaries. Falls back to the cloud LLM if the local model isn't loaded yet. Means long-thread continuity scales indefinitely at zero cloud quota cost.
 
 ---
 
@@ -298,7 +303,7 @@ Both upload `checkpoints/base.bin` to **HuggingFace Hub** (`aashir-athar/mindees
 | Styling | **Tailwind CSS v4** | CSS-variable theming, zero-JS class composition. |
 | Aesthetic | **Claude/Grok-style minimal** | Single `max-w-3xl` column on every page, slim sticky header, no glassmorphism, no decorative gradients — validated against the `ui-ux-pro-max` skill's "Minimal Single Column" pattern. |
 | Native model | **Custom decoder-only transformer (TypeScript)** | Full readability, full ownership, no CUDA needed for inference. |
-| Variants | **nano · small · base · large · home-max · home-moe · moe-small · moe-base** | 12M → 1.3B params. `home-max` (~349M) is tuned for a single 12GB consumer GPU (RTX 5070 / 4070 Ti) at bf16. |
+| Variants | **nano · small · base · large · home-max · home-11gb · home-moe · moe-small · moe-base** | 12M → 1.3B params. `home-max` (~349M) is tuned for a single 12 GB consumer GPU at fp16. `home-11gb` (~280M, 20L × d_model 1024) is the deeper-narrower variant tuned for an 11 GB usable VRAM budget (RTX 5070 in WSL2, RTX 5060 Ti). |
 | Sparse experts | **MoE with top-K routing + load-balance loss** | Capacity scaling at a fraction of dense compute. |
 | Attention | **MLA + GQA + RoPE** | Compressed KV cache; long context fits. |
 | Aux training | **MTP (Multi-Token Prediction)** | Denser training signal; free drafts for speculative decoding. |
@@ -311,7 +316,7 @@ Both upload `checkpoints/base.bin` to **HuggingFace Hub** (`aashir-athar/mindees
 | Web research | **JINA + Tavily + Exa + DuckDuckGo + Wikipedia + arXiv + Reddit + HackerNews** | Free tiers + key-less providers; abstracted behind `searchWeb()` and `searchSocial()`. |
 | Web extraction | **Firecrawl / Jina Reader** | Clean readable text from any URL, with graceful fallback. |
 | Embeddings | **`@huggingface/transformers` BGE-small-en-v1.5 (Q8)** | Runs locally inside the Node runtime, no GPU. On Vercel, skips the Ollama probe entirely to save the 2.5s timeout. |
-| Local ML | **transformers.js (4 models)** | Emotion · sentiment · NER · toxicity — all Q8, all free, ~430 MB resident worst-case. |
+| Local ML | **transformers.js (9 models)** | Embedder · reranker · emotion · sentiment · NER · toxicity · **PII guard · zero-shot topic router · local thread summariser** — all Q8, all free, ~705 MB resident if all loaded simultaneously (lazy in practice). |
 | Validation | **Zod** | Type-safe request/response shapes everywhere. |
 | Streaming | **Native SSE + ReadableStream** | No vendor SDK lock-in. Per-chunk 25s stall timeout. |
 | Cron | **cron-job.org (5-min) + Vercel Cron (daily fallback)** | Free 1-minute granularity from cron-job.org; Vercel's daily cron as belt-and-braces. |
