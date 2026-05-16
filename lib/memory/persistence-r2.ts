@@ -98,7 +98,7 @@ export async function r2List(client: R2Client, prefix: string): Promise<R2Object
     const truncated = /<IsTruncated>true<\/IsTruncated>/.test(xml);
     if (!truncated) break;
     const m = xml.match(/<NextContinuationToken>([^<]+)<\/NextContinuationToken>/);
-    if (!m) break;
+    if (!m || !m[1]) break;
     continuationToken = m[1];
   }
   return out;
@@ -111,6 +111,7 @@ function parseListXml(xml: string, out: R2Object[]): void {
   let m: RegExpExecArray | null;
   while ((m = re.exec(xml)) !== null) {
     const block = m[1];
+    if (!block) continue;
     const key = block.match(/<Key>([^<]+)<\/Key>/)?.[1];
     const size = parseInt(block.match(/<Size>(\d+)<\/Size>/)?.[1] ?? "0", 10);
     const etag = block.match(/<ETag>"?([^"<]+)"?<\/ETag>/)?.[1];
@@ -191,7 +192,7 @@ async function signedFetch(
   return fetch(url, {
     method,
     headers: { ...headers, Authorization: authHeader },
-    body: body && (method === "PUT" || method === "POST") ? new Uint8Array(body) : undefined,
+    body: body && method === "PUT" ? new Uint8Array(body) : undefined,
   });
 }
 
