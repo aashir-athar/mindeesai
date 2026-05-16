@@ -9,6 +9,15 @@ Use them for:
 - Catching up after a stretch where local GPU was offline
 - Testing new variants before committing to them
 
+## Drop-in notebooks
+
+If you just want to run, skip the copy-paste guide below and grab one of these:
+
+- **Kaggle**: [`scripts/notebooks/kaggle_train.ipynb`](../scripts/notebooks/kaggle_train.ipynb) — download, upload to Kaggle, set `HF_TOKEN` secret, Run All. Pushes to HF revision `kaggle-weekly`.
+- **Colab**: [`scripts/notebooks/colab_train.ipynb`](../scripts/notebooks/colab_train.ipynb) — same, on Colab. Pushes to HF revision `colab-burst`.
+
+The rest of this doc explains what each cell does, when to deviate from defaults, and the trade-offs between platforms.
+
 Use GH Actions for:
 - Always-on continual baseline (never breaks, no human needed)
 - Pipeline health check (proves R2 → training → HF flow works daily)
