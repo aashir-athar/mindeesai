@@ -42,9 +42,9 @@ on:
         type: choice
         options: [nano, small]
       steps:
-        description: 'Training steps per run (default 20000 ≈ 5-5.5h on CPU, near the 6h hard cap). Daily × 20k = 140k+ steps/week, 600k+ steps/month with resume on.'
+        description: 'Training steps per run. Empirically GH Actions CPU does ~22.5 sec/step on the small variant, so 700 steps ≈ 4.5h training. Daily × 700 ≈ 21k steps/month. (For real capability gains, use your local GPU — 50-100× faster.)'
         required: false
-        default: '20000'
+        default: '700'
       batch:
         description: 'Batch size'
         required: false
@@ -74,12 +74,24 @@ on:
   schedule:
     # DAILY at 03:00 UTC. GitHub may delay scheduled runs by up to ~30 min.
     # Each tick resumes from the previous tick's checkpoint on HF, so
-    # learning accumulates: 20k steps/day × 30 days ≈ 600k steps/month
-    # of continual training on the latest distill corpus.
-    # PUBLIC repos have UNLIMITED Actions minutes on free tier — so 5.5h
-    # daily runs (~165h/month) cost nothing. Private repos would hit the
-    # 2000-min/month wall in 6 days, so use a private repo here only if
-    # you're willing to pay for overage or drop to fewer/shorter runs.
+    # learning accumulates across runs.
+    #
+    # EMPIRICAL THROUGHPUT (measured from a real run, not theoretical):
+    #   small variant (40.8M params, ctx=2048, batch=4) = ~22.5 sec/step
+    #   In 4.5h (270 min) of training: ~700 steps per run.
+    #   Daily × 700 = 21,000 steps/month of cumulative training.
+    #
+    # PUBLIC repos have UNLIMITED Actions minutes on free tier — so 5h
+    # daily runs (~150h/month) cost nothing. Private repos would hit the
+    # 2000-min/month wall in 6 days.
+    #
+    # REALITY CHECK on capability gain:
+    #   This is intentionally a SLOW continual-training baseline. CPU
+    #   training is ~50-100× slower than GPU. For real capability gains,
+    #   train locally with scripts/train/run-home-max.sh on your RTX —
+    #   one overnight GPU run produces ~3 months of GH Actions output.
+    #   This workflow's value is: always-on, never breaks, public mirror,
+    #   pipeline health check, fallback brain if local training stalls.
     - cron: '0 3 * * *'
 
 env:
@@ -89,7 +101,12 @@ env:
 jobs:
   pretrain:
     runs-on: ubuntu-latest
-    timeout-minutes: 350  # cap below the 360-minute hard limit
+    # Hard kill at 5h 10min total. The training step itself uses a tighter
+    # 4h 50min Python-level timeout (290m wrapper below), leaving ~20 min
+    # for boot + pip install + R2 fetch + HF resume fetch + final upload.
+    # User-requested cap: 5h MAX per day. This setup hits 4h 50min of pure
+    # training, never exceeds 5h 10min total.
+    timeout-minutes: 310
     permissions:
       contents: read
 
@@ -268,7 +285,7 @@ jobs:
           MIND_VARIANT: ${{ github.event.inputs.variant || 'small' }}
         run: |
           VARIANT="${{ github.event.inputs.variant || 'small' }}"
-          STEPS="${{ github.event.inputs.steps || '20000' }}"
+          STEPS="${{ github.event.inputs.steps || '700' }}"
           BATCH="${{ github.event.inputs.batch || '4' }}"
           RESUME_FLAG="${{ github.event.inputs.resume || 'true' }}"
           mkdir -p checkpoints data
@@ -300,7 +317,18 @@ jobs:
             RESUME_ARGS="--resume checkpoints/torch-resume.pt"
             echo "Resuming from prior checkpoint (torch-resume.pt detected)"
           fi
-          python scripts/train/pretrain.py \
+          # `timeout 290m` is the Python-level kill — gives pretrain a 4h 50min
+          # budget, leaves ~20 min for boot + setup + final HF upload below.
+          # The workflow's timeout-minutes is 310 (5h 10min) as the outer
+          # hard wall, so the user's "5h MAX per day" constraint holds even
+          # if the upload step itself is slow.
+          #
+          # `|| echo` ensures the workflow CONTINUES to the upload step when
+          # training exits early (timeout, OOM, dataset stall, anything).
+          # Combined with --ckpt-every 1000, that means a mid-run kill costs
+          # at most ~15 min of progress (16 min at 1 step/sec), and the next
+          # day's run resumes from the last saved checkpoint.
+          timeout 290m python scripts/train/pretrain.py \
             --variant "$VARIANT" \
             --corpus scripts/data/corpus.txt \
             --tokenizer tokenizer/tokenizer.json \
@@ -309,9 +337,10 @@ jobs:
             --grad-accum 1 \
             --lr 3e-4 \
             --warmup 100 \
+            --wd 0.1 \
             --val-frac 0.05 \
-            --val-every 500 \
-            --ckpt-every 2000 \
+            --val-every 100 \
+            --ckpt-every 30 \
             --base-weight 1.0 \
             --distill-weight 4.0 \
             --completion-only-loss 1 \
@@ -323,7 +352,8 @@ jobs:
             $MIX_ARGS \
             --log data/training-metrics.jsonl \
             --out checkpoints/base.bin \
-            --torch-ckpt checkpoints/torch-resume.pt
+            --torch-ckpt checkpoints/torch-resume.pt \
+            || echo "::warning::training exited early (timeout, error, or OOM) — uploading partial progress"
 
       - name: Show training summary
         run: |

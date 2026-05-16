@@ -236,6 +236,34 @@
       "max_tokens": 3000000,
       "weight": 1.5,
       "note": "Tree-structured CoT reasoning. Strong on real-world problem solving."
+    },
+    {
+      "name": "systemchat",
+      "dataset": "abacusai/SystemChat-1.1",
+      "split": "train",
+      "kind": "dialogue",
+      "max_tokens": 2000000,
+      "weight": 1.5,
+      "note": "Multi-turn dialogues with diverse system prompts. Teaches the model to follow custom personas and instructions cleanly — directly counter-acts robotic 'as an AI' default register."
+    },
+    {
+      "name": "wizardlm-evol",
+      "dataset": "WizardLMTeam/WizardLM_evol_instruct_V2_196k",
+      "split": "train",
+      "kind": "dialogue",
+      "max_tokens": 3000000,
+      "weight": 1.5,
+      "note": "196k evolved instructions across many domains — sales, marketing, psychology, business, technical Q&A. Synthetic but very high quality."
+    },
+    {
+      "name": "the-stack-javascript",
+      "dataset": "bigcode/the-stack-smol",
+      "config": "data/javascript",
+      "split": "train",
+      "kind": "raw",
+      "max_tokens": 3000000,
+      "weight": 1.0,
+      "note": "JavaScript from public GitHub — JSX patterns, React Native components, Node.js. Adds RN production-code vocabulary."
     }
   ]
 }
