@@ -1,92 +1,123 @@
 {
   "_doc": [
-    "Training data recipe — 'Broad Brain' mix v3 (Expanded Verticals).",
+    "Training data recipe — 'Broad Brain' mix v4 (Quality-pruned for small-model focus).",
     "",
-    "Goal: train a small model (50M-350M params) to handle code, math,",
-    "reasoning, real-world problem solving, business, marketing, psychology,",
-    "wealth/investing, motivation, fitness, UI/UX, web3 — while keeping the",
-    "persona on top via --corpus and --distill-corpus weights.",
+    "Goal: train a small model (17M–280M params) toward Claude-Code-ish capability",
+    "in code, math, reasoning, and conversational assistant work — while keeping",
+    "the 'Mindees' persona on top via --corpus and --distill-corpus weights.",
     "",
-    "HONEST DATASET-AVAILABILITY NOTE:",
-    "  Many of these verticals (dark psychology, crypto futures, wealth",
-    "  creation, fitness coaching) don't have dedicated, clean, free training",
-    "  datasets on HuggingFace. What DOES exist and is excellent: broad",
-    "  high-quality instruction-following datasets (OpenHermes-2.5, SlimOrca,",
-    "  OpenAssistant/oasst1, UltraChat) that internally cover thousands of",
-    "  topics organically because they're curated from internet-scale chat.",
-    "  Sales, marketing, psychology, business, motivation, even fitness and",
-    "  basic investing show up naturally in those mixes. We rely on them for",
-    "  vertical coverage rather than trying to find specialised single-topic",
-    "  datasets that mostly don't exist.",
+    "v4 CHANGES vs v3:",
+    "  • Removed 4 entries with kind='preference' / 'agentic' that the loader",
+    "    silently skips (pretrain.py only handles 'raw' and 'dialogue'). They",
+    "    live in _pending_stages below as placeholders for a future DPO/RLHF",
+    "    stage that hasn't been built yet.",
+    "  • Removed oasst1 — flat-tree storage format yields '0 conversations'",
+    "    in the parser. Its tokens were noise rather than signal at any weight.",
+    "  • Removed tulu3-sft-mixture — non-commercial subsets risk a license",
+    "    violation on the public-revision HF model.",
+    "  • Removed slim-orca and ultrachat — heavy redundancy with openhermes +",
+    "    smoltalk for broad chat. At small scale, three datasets covering the",
+    "    same ground just means more epochs over the same patterns.",
+    "  • Lowered token caps on the big synthetic mixes so no single dataset",
+    "    dominates several epochs before others finish one.",
+    "  • Rebalanced weights with explicit tiers (anchor / broad / code / math /",
+    "    reasoning / domain spice / warmup / empathy).",
     "",
-    "  For UI/UX we add HTML and CSS slices of The Stack — gives the model",
-    "  the visual-design vocabulary it would otherwise lack.",
-    "  For web3 / crypto code we already have Solidity from The Stack;",
-    "  for crypto investing knowledge specifically there's no good free",
-    "  training corpus — the LLM router (Groq + Gemini Flash) covers that",
-    "  via the live web-search connector instead.",
-    "  'Dark psychology' / manipulation tactics: NO dataset for this, and",
-    "  no plan to add one — bad target for a public-revision model.",
+    "WEIGHT TIERS (highest → lowest):",
+    "  2.5  human-curated anchor: dolly, no-robots",
+    "  2.0  small-model specialty: smol-smoltalk",
+    "  1.8  persona protection / code crown: systemchat, magicoder-evol",
+    "  1.5  broad chat / math / code instructions: openhermes, metamath,",
+    "       mathinstruct, codefeedback-filtered, code-alpaca",
+    "  1.3  broad chat secondary: smoltalk",
+    "  1.2  reasoning trees: open-platypus, ultrainteract",
+    "  1.0  raw code + alternates: the-stack-python/typescript, opencoder,",
+    "       wizardlm-evol",
+    "  0.8  raw-domain secondary: the-stack-javascript, openthoughts2,",
+    "       fineweb-edu",
+    "  0.6  narrow domain: the-stack-solidity/html/css",
+    "  0.5  warmup + empathy: tinystories, empathetic-counseling",
+    "  0.4  empathy floor: mental-health-counseling",
     "",
-    "DEPLOY PATHS",
-    "  Local home-11gb training:",
-    "    bash scripts/train/run-home-max.sh \\",
-    "      --resume --variant home-11gb \\",
-    "      --batch 2 --grad-accum 4 --no-compile \\",
-    "      --mix-config scripts/data/mix-broadbrain.json",
+    "RESULTING SIGNAL-SHARE (weight × tokens, normalized):",
+    "  • Code:                   ~26%  (heavy — primary capability target)",
+    "  • Broad assistant chat:   ~26%",
+    "  • Anchor (human-quality): ~22%",
+    "  • Math + reasoning:       ~16%",
+    "  • Domain spice:           ~ 6%",
+    "  • Web knowledge + warmup: ~ 4%",
+    "  • Empathy:                ~ 0.7%",
     "",
-    "  GitHub Actions daily small-variant training:",
-    "    Auto-fires at 03:00 UTC every day via .github/workflows/pretrain.yml.",
-    "    Each run resumes from the previous day's checkpoint on HF small-weekly.",
+    "TOTAL POOL ≈ 46M tokens. Scaling math for the two training environments:",
     "",
-    "SYNTHETIC vs HUMAN DATA",
-    "  Several entries below are SYNTHETIC (generated by larger LLMs as",
-    "  instruction data — OpenHermes, MetaMath, MathInstruct, Magicoder,",
-    "  UltraInteract, UltraChat, SlimOrca). This is the standard small-LLM",
-    "  distillation recipe — Phi-3, DeepSeek, every modern <1B model uses it.",
-    "  The human-curated ones (dolly, no_robots, oasst1) provide quality",
-    "  anchoring. Remove the synthetic entries if you want a pure-human-data",
-    "  build (capability drops ~60%; persona stays clean).",
+    "  cpu_max_5h_50k variant (GH Actions, batch=4, seq=256):",
+    "    1024 tokens/step × 15k steps/run × 4 runs/day = 61M tokens/day",
+    "    → cycles whole pool ~1.3× per day, ~9 epochs/week",
     "",
-    "COVERAGE MATRIX",
-    "  • Persona voice:           distill-corpus + base-corpus",
-    "  • Narrative warmup:        TinyStories",
-    "  • Human-written quality:   dolly + no_robots + oasst1",
-    "  • Broad assistant chat:    OpenHermes-2.5 + SlimOrca + UltraChat",
-    "                             (covers sales / marketing / psychology /",
-    "                              business / wealth / motivation / fitness",
-    "                              organically across millions of examples)",
-    "  • Code Python:             the-stack-python + code-alpaca + magicoder",
-    "  • Code TypeScript / JS:    the-stack-typescript",
-    "  • Code Solidity / web3:    the-stack-solidity",
-    "  • UI / UX / web design:    the-stack-html + the-stack-css",
-    "  • Math:                    MetaMathQA + MathInstruct",
-    "  • Reasoning / STEM:        Open-Platypus + UltraInteract",
+    "  home-11gb variant (local RTX / Kaggle / Colab, batch=2, seq=2048):",
+    "    4096 tokens/step × ~5k steps/session = 20M tokens/session",
+    "    → cycles whole pool ~0.4× per session, ~3 epochs across 8 sessions",
     "",
-    "TOTAL POOL ≈ 60M tokens. At 20k steps/day × batch 4 × seq 2048 = 160M",
-    "tokens seen per day. Over a month: 4.8B tokens seen. That's 80 epochs",
-    "over the diverse pool — high but acceptable for instruction tuning at",
-    "small scale."
+    "DEPLOY PATHS:",
+    "  Local RTX:       bash scripts/train/run-home-max.sh (auto-resumes now)",
+    "  GH Actions cron: .github/workflows/pretrain.yml at 03/09/15/21 UTC",
+    "  Kaggle:          scripts/notebooks/kaggle_train.ipynb",
+    "  Colab:           scripts/notebooks/colab_train.ipynb",
+    "",
+    "All four environments train independently and push to separate HF branches.",
+    "main (local RTX) is sacrosanct — never touched by CI or notebooks.",
+    "",
+    "PROTECTED PERSONA SIGNAL:",
+    "  The Mindees persona is layered on top via --corpus + --distill-corpus",
+    "  weighted at 1.0 + 4.0 respectively in pretrain.py invocations. Those",
+    "  signals override anything in this mix when prompts match persona triggers.",
+    "  This mix supplies general capability; persona is the corpus layer above it."
   ],
 
+  "_pending_stages": {
+    "_doc": "Datasets staged for a future DPO/RLHF training pipeline that hasn't been built yet. The current pretrain.py loader handles only kind='raw' and kind='dialogue' — anything else is silently skipped. When a separate dpo_train.py exists, wire these into its config.",
+    "preference_data": [
+      {
+        "name": "human-like-dpo",
+        "dataset": "HumanLLMs/Human-Like-DPO-Dataset",
+        "split": "train",
+        "schema": "{prompt, chosen, rejected}",
+        "use_for": "DPO — human-like conversational tone preferences"
+      },
+      {
+        "name": "ultrafeedback-binarized",
+        "dataset": "HuggingFaceH4/ultrafeedback_binarized",
+        "split": "train_prefs",
+        "schema": "{chosen[], rejected[]} (lists of message dicts)",
+        "use_for": "DPO — helpfulness and instruction-following alignment"
+      },
+      {
+        "name": "ultrafeedback",
+        "dataset": "openbmb/UltraFeedback",
+        "split": "train",
+        "schema": "{instruction, completions[].response + annotations}",
+        "use_for": "Reward modeling and rejection sampling"
+      }
+    ],
+    "agentic_data": [
+      {
+        "name": "nemotron-agentic-swe",
+        "dataset": "nvidia/Nemotron-RL-Agentic-SWE-Pivot-v1",
+        "split": "train",
+        "use_for": "Tool-use, function-calling, multi-step SWE pivoting"
+      }
+    ]
+  },
+
   "sources": [
-    {
-      "name": "tinystories",
-      "dataset": "roneneldan/TinyStories",
-      "split": "train",
-      "kind": "raw",
-      "max_tokens": 500000,
-      "weight": 0.8,
-      "note": "Narrative warmup. Helps embeddings stabilise."
-    },
     {
       "name": "dolly",
       "dataset": "databricks/databricks-dolly-15k",
       "split": "train",
       "kind": "dialogue",
       "max_tokens": 1500000,
-      "weight": 2.2,
-      "note": "Human-written instructions + responses."
+      "weight": 2.5,
+      "note": "ANCHOR. Human-written instructions + responses. Zero synthetic noise."
     },
     {
       "name": "no-robots",
@@ -94,148 +125,17 @@
       "split": "train",
       "kind": "dialogue",
       "max_tokens": 500000,
-      "weight": 2.2,
-      "note": "10K examples human-curated by skilled annotators. Zero synthetic. Highest instruction quality per token. NOTE: split is `train` (not `train_sft` like ultrachat — the H4 datasets are inconsistent on this)."
+      "weight": 2.5,
+      "note": "ANCHOR. 10K examples human-curated by skilled annotators. Highest instruction quality per token in the entire mix."
     },
     {
-      "name": "oasst1",
-      "dataset": "OpenAssistant/oasst1",
+      "name": "smol-smoltalk",
+      "dataset": "HuggingFaceTB/smol-smoltalk",
       "split": "train",
       "kind": "dialogue",
-      "max_tokens": 1000000,
-      "weight": 0.5,
-      "note": "OpenAssistant Conversations Dataset — fully human-written. KNOWN QUIRK: oasst1 is stored as a flat message tree (each row is a single node with parent_id), so load_dialogue_hf can't reassemble proper multi-turn conversations and falls through to flat-token ingestion ('0 conversations → 2M tokens' in the log). The text is still high-quality human writing so we keep it at low weight as a raw-text quality anchor — not as a structured chat signal. If/when load_dialogue_hf gets an oasst1-tree-reassembly path, restore weight to 2.0."
-    },
-    {
-      "name": "openhermes",
-      "dataset": "teknium/OpenHermes-2.5",
-      "split": "train",
-      "kind": "dialogue",
-      "max_tokens": 5000000,
+      "max_tokens": 3000000,
       "weight": 2.0,
-      "note": "1M+ broad-coverage instruction examples — sales, marketing, psychology, business advice, motivation, fitness, wealth-building all show up organically. Synthetic (GPT-distilled), highest-quality broad chat dataset on HF."
-    },
-    {
-      "name": "slim-orca",
-      "dataset": "Open-Orca/SlimOrca",
-      "split": "train",
-      "kind": "dialogue",
-      "max_tokens": 3000000,
-      "weight": 1.5,
-      "note": "363k diverse instruction examples from the OpenOrca lineage. Synthetic. Strong general-purpose coverage including reasoning + advice + Q&A across professional and personal verticals."
-    },
-    {
-      "name": "ultrachat",
-      "dataset": "HuggingFaceH4/ultrachat_200k",
-      "split": "train_sft",
-      "kind": "dialogue",
-      "max_tokens": 5000000,
-      "weight": 1.3,
-      "note": "Multi-turn chat across thousands of topics. Synthetic (ChatGPT-generated). Covers psychology / advice / motivation / business naturally."
-    },
-    {
-      "name": "the-stack-python",
-      "dataset": "bigcode/the-stack-smol",
-      "config": "data/python",
-      "split": "train",
-      "kind": "raw",
-      "max_tokens": 5000000,
-      "weight": 1.3,
-      "note": "Real Python from public GitHub."
-    },
-    {
-      "name": "the-stack-typescript",
-      "dataset": "bigcode/the-stack-smol",
-      "config": "data/typescript",
-      "split": "train",
-      "kind": "raw",
-      "max_tokens": 3000000,
-      "weight": 1.0,
-      "note": "TypeScript — Next.js / React / web stack."
-    },
-    {
-      "name": "the-stack-solidity",
-      "dataset": "bigcode/the-stack-smol",
-      "config": "data/solidity",
-      "split": "train",
-      "kind": "raw",
-      "max_tokens": 1500000,
-      "weight": 0.8,
-      "note": "Solidity smart contracts. Web3 / blockchain coverage."
-    },
-    {
-      "name": "the-stack-html",
-      "dataset": "bigcode/the-stack-smol",
-      "config": "data/html",
-      "split": "train",
-      "kind": "raw",
-      "max_tokens": 2000000,
-      "weight": 0.8,
-      "note": "HTML markup. Visual-structure vocabulary for UI tasks."
-    },
-    {
-      "name": "the-stack-css",
-      "dataset": "bigcode/the-stack-smol",
-      "config": "data/css",
-      "split": "train",
-      "kind": "raw",
-      "max_tokens": 1500000,
-      "weight": 0.8,
-      "note": "CSS / SCSS. Design + layout + Tailwind-adjacent class vocabulary for UI/UX."
-    },
-    {
-      "name": "code-alpaca",
-      "dataset": "sahil2801/CodeAlpaca-20k",
-      "split": "train",
-      "kind": "dialogue",
-      "max_tokens": 1000000,
-      "weight": 1.4,
-      "note": "Code instructions in alpaca format."
-    },
-    {
-      "name": "magicoder-evol",
-      "dataset": "ise-uiuc/Magicoder-Evol-Instruct-110K",
-      "split": "train",
-      "kind": "dialogue",
-      "max_tokens": 4000000,
-      "weight": 1.6,
-      "note": "110K evolved code instructions. Highest-quality code SFT on HF."
-    },
-    {
-      "name": "metamath",
-      "dataset": "meta-math/MetaMathQA",
-      "split": "train",
-      "kind": "dialogue",
-      "max_tokens": 3000000,
-      "weight": 1.5,
-      "note": "395K math problems with worked CoT."
-    },
-    {
-      "name": "mathinstruct",
-      "dataset": "TIGER-Lab/MathInstruct",
-      "split": "train",
-      "kind": "dialogue",
-      "max_tokens": 3000000,
-      "weight": 1.5,
-      "note": "Hybrid CoT + program-of-thought math instructions."
-    },
-    {
-      "name": "open-platypus",
-      "dataset": "garage-bAInd/Open-Platypus",
-      "split": "train",
-      "kind": "dialogue",
-      "max_tokens": 2000000,
-      "weight": 1.5,
-      "note": "STEM reasoning, logic, science. Curated from many sources."
-    },
-    {
-      "name": "ultrainteract",
-      "dataset": "openbmb/UltraInteract_sft",
-      "split": "train",
-      "kind": "dialogue",
-      "max_tokens": 3000000,
-      "weight": 1.5,
-      "note": "Tree-structured CoT reasoning. Strong on real-world problem solving."
+      "note": "ANCHOR. HuggingFace's instruction-tuning dataset *adapted specifically for sub-1B models*. Best structural fit for cpu_max_5h_50k (17M) and home-11gb (280M)."
     },
     {
       "name": "systemchat",
@@ -243,17 +143,91 @@
       "split": "train",
       "kind": "dialogue",
       "max_tokens": 2000000,
+      "weight": 1.8,
+      "note": "PERSONA PROTECTION. Multi-turn dialogues with diverse system prompts. Teaches the model to follow CUSTOM personas cleanly — directly counter-acts the default 'as an AI' robotic register that synthetic SFT mixes drift toward."
+    },
+    {
+      "name": "openhermes",
+      "dataset": "teknium/OpenHermes-2.5",
+      "split": "train",
+      "kind": "dialogue",
+      "max_tokens": 4000000,
       "weight": 1.5,
-      "note": "Multi-turn dialogues with diverse system prompts. Teaches the model to follow custom personas and instructions cleanly — directly counter-acts robotic 'as an AI' default register."
+      "note": "BROAD CHAT. 1M+ instruction examples — sales, marketing, psychology, business, motivation, fitness, wealth all show up organically. Synthetic (GPT-distilled) but highest-quality broad chat dataset on HF."
+    },
+    {
+      "name": "smoltalk",
+      "dataset": "HuggingFaceTB/smoltalk",
+      "split": "train",
+      "kind": "dialogue",
+      "max_tokens": 3000000,
+      "weight": 1.3,
+      "note": "BROAD CHAT. Synthetic SFT dataset used for SmolLM2-Instruct. Broad instruction-following and conversational coverage."
     },
     {
       "name": "wizardlm-evol",
       "dataset": "WizardLMTeam/WizardLM_evol_instruct_V2_196k",
       "split": "train",
       "kind": "dialogue",
-      "max_tokens": 3000000,
+      "max_tokens": 2500000,
+      "weight": 1.0,
+      "note": "BROAD CHAT. 196k evolved instructions — adds a different synthetic *distribution* from openhermes (Wizard evol-instruct prompting vs. OpenHermes Orca-lineage), reducing redundancy."
+    },
+    {
+      "name": "magicoder-evol",
+      "dataset": "ise-uiuc/Magicoder-Evol-Instruct-110K",
+      "split": "train",
+      "kind": "dialogue",
+      "max_tokens": 4000000,
+      "weight": 1.8,
+      "note": "CODE CROWN. 110K evolved code instructions. Highest-quality code SFT on HF — primary driver of Claude-Code-ish capability at this scale."
+    },
+    {
+      "name": "codefeedback-filtered",
+      "dataset": "m-a-p/CodeFeedback-Filtered-Instruction",
+      "split": "train",
+      "kind": "dialogue",
+      "max_tokens": 2000000,
       "weight": 1.5,
-      "note": "196k evolved instructions across many domains — sales, marketing, psychology, business, technical Q&A. Synthetic but very high quality."
+      "note": "CODE. Filtered high-quality code instruction data. Complementary distribution to magicoder + code-alpaca."
+    },
+    {
+      "name": "code-alpaca",
+      "dataset": "sahil2801/CodeAlpaca-20k",
+      "split": "train",
+      "kind": "dialogue",
+      "max_tokens": 1000000,
+      "weight": 1.5,
+      "note": "CODE. Code instructions in alpaca format — simpler-task distribution than magicoder."
+    },
+    {
+      "name": "opencoder-sft-stage2",
+      "dataset": "OpenCoder-LLM/opc-sft-stage2",
+      "split": "train",
+      "kind": "dialogue",
+      "max_tokens": 2000000,
+      "weight": 1.0,
+      "note": "CODE. Educational code instructions + test-case-oriented examples. Backstop in case The Stack downloads get gated."
+    },
+    {
+      "name": "the-stack-python",
+      "dataset": "bigcode/the-stack-smol",
+      "config": "data/python",
+      "split": "train",
+      "kind": "raw",
+      "max_tokens": 3000000,
+      "weight": 1.0,
+      "note": "CODE RAW. Real Python from public GitHub — production patterns that don't appear in synthetic instruction data."
+    },
+    {
+      "name": "the-stack-typescript",
+      "dataset": "bigcode/the-stack-smol",
+      "config": "data/typescript",
+      "split": "train",
+      "kind": "raw",
+      "max_tokens": 2000000,
+      "weight": 1.0,
+      "note": "CODE RAW. TypeScript — Next.js / React / web stack vocabulary."
     },
     {
       "name": "the-stack-javascript",
@@ -261,9 +235,120 @@
       "config": "data/javascript",
       "split": "train",
       "kind": "raw",
+      "max_tokens": 2000000,
+      "weight": 0.8,
+      "note": "CODE RAW. JavaScript — JSX patterns, React Native components, Node.js."
+    },
+    {
+      "name": "metamath",
+      "dataset": "meta-math/MetaMathQA",
+      "split": "train",
+      "kind": "dialogue",
+      "max_tokens": 2000000,
+      "weight": 1.5,
+      "note": "MATH. 395K math problems with worked chain-of-thought. Primary math signal."
+    },
+    {
+      "name": "mathinstruct",
+      "dataset": "TIGER-Lab/MathInstruct",
+      "split": "train",
+      "kind": "dialogue",
+      "max_tokens": 2000000,
+      "weight": 1.5,
+      "note": "MATH. Hybrid CoT + program-of-thought math instructions. Complements MetaMath with PoT distribution."
+    },
+    {
+      "name": "open-platypus",
+      "dataset": "garage-bAInd/Open-Platypus",
+      "split": "train",
+      "kind": "dialogue",
+      "max_tokens": 1500000,
+      "weight": 1.2,
+      "note": "REASONING. STEM reasoning, logic, science. Curated from many sources."
+    },
+    {
+      "name": "ultrainteract",
+      "dataset": "openbmb/UltraInteract_sft",
+      "split": "train",
+      "kind": "dialogue",
+      "max_tokens": 2000000,
+      "weight": 1.2,
+      "note": "REASONING. Tree-structured CoT reasoning. Strong on real-world problem solving."
+    },
+    {
+      "name": "openthoughts2",
+      "dataset": "open-thoughts/OpenThoughts2-1M",
+      "split": "train",
+      "kind": "dialogue",
+      "max_tokens": 1000000,
+      "weight": 0.8,
+      "note": "REASONING. Synthetic reasoning across math/science/code/puzzles. Kept low-weight at small scale — capacity for explicit reasoning is limited below ~280M params."
+    },
+    {
+      "name": "the-stack-solidity",
+      "dataset": "bigcode/the-stack-smol",
+      "config": "data/solidity",
+      "split": "train",
+      "kind": "raw",
+      "max_tokens": 1000000,
+      "weight": 0.6,
+      "note": "DOMAIN SPICE. Solidity smart contracts. Web3 / blockchain code vocabulary."
+    },
+    {
+      "name": "the-stack-html",
+      "dataset": "bigcode/the-stack-smol",
+      "config": "data/html",
+      "split": "train",
+      "kind": "raw",
+      "max_tokens": 1000000,
+      "weight": 0.6,
+      "note": "DOMAIN SPICE. HTML markup. Visual-structure vocabulary for UI tasks."
+    },
+    {
+      "name": "the-stack-css",
+      "dataset": "bigcode/the-stack-smol",
+      "config": "data/css",
+      "split": "train",
+      "kind": "raw",
+      "max_tokens": 800000,
+      "weight": 0.6,
+      "note": "DOMAIN SPICE. CSS / SCSS. Tailwind-adjacent class vocabulary for UI/UX."
+    },
+    {
+      "name": "empathetic-counseling",
+      "dataset": "LuangMV97/Empathetic_counseling_Dataset",
+      "split": "train",
+      "kind": "dialogue",
+      "max_tokens": 500000,
+      "weight": 0.5,
+      "note": "EMPATHY. Counseling-style dialogue. Adds emotional awareness and supportive tone. Low weight to avoid making the model sound therapist-like on non-emotional turns."
+    },
+    {
+      "name": "mental-health-counseling",
+      "dataset": "Amod/mental_health_counseling_conversations",
+      "split": "train",
+      "kind": "dialogue",
+      "max_tokens": 500000,
+      "weight": 0.4,
+      "note": "EMPATHY. Counseling Q&A data for sensitive-response behavior. Lowest weight — used as a floor for emotional turns, not a default."
+    },
+    {
+      "name": "tinystories",
+      "dataset": "roneneldan/TinyStories",
+      "split": "train",
+      "kind": "raw",
+      "max_tokens": 300000,
+      "weight": 0.5,
+      "note": "WARMUP. Narrative warmup — helps embeddings stabilise early in training. Cap is intentionally low; the model doesn't need to specialize in children's stories."
+    },
+    {
+      "name": "fineweb-edu",
+      "dataset": "HuggingFaceFW/fineweb-edu",
+      "split": "train",
+      "kind": "raw",
       "max_tokens": 3000000,
-      "weight": 1.0,
-      "note": "JavaScript from public GitHub — JSX patterns, React Native components, Node.js. Adds RN production-code vocabulary."
+      "weight": 0.8,
+      "note": "KNOWLEDGE. High-quality educational web text. Adds factual / explanatory knowledge without relying only on chat data. Capped at 3M (full FW-Edu is 1.3 trillion tokens — would dominate)."
     }
   ]
 }

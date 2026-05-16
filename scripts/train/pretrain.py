@@ -20,7 +20,9 @@ checkpoint trained here loads cleanly inside the Next.js app:
   - Mixed-precision (autocast + GradScaler)
   - Gradient clipping
   - Validation loop on held-out shard
-  - Resume from checkpoint (--resume <path>)
+  - Resume from checkpoint (AUTOMATIC — looks for ../../checkpoints/torch-resume.pt
+    by default; pass --no-resume to force-restart from random init, or
+    --resume <other-path> to load from a custom location)
   - Streaming dataset (HuggingFace `datasets` if installed; else file lines)
   - JSONL training log compatible with the in-app /dashboard
 
@@ -950,7 +952,15 @@ def main():
     ap.add_argument("--log", default="../../data/training-metrics.jsonl")
     ap.add_argument("--out", default="../../checkpoints/base.bin")
     ap.add_argument("--torch-ckpt", default="../../checkpoints/torch-resume.pt")
-    ap.add_argument("--resume", default=None)
+    # --resume now defaults to the same path as --torch-ckpt, so every
+    # `python pretrain.py ...` invocation auto-picks-up the prior session.
+    # First run: the file doesn't exist yet → falls through to fresh init.
+    # Subsequent runs: file exists → continues training without losing progress.
+    # Pass --no-resume to explicitly start over from random init.
+    ap.add_argument("--resume", default="../../checkpoints/torch-resume.pt",
+                    help="Path to torch-resume.pt to load optimizer + step state from. Defaults to ../../checkpoints/torch-resume.pt (same as --torch-ckpt). Missing file is fine — falls through to fresh init.")
+    ap.add_argument("--no-resume", action="store_true",
+                    help="Force training to start from random init even if a checkpoint exists at --resume path. Use this only when you intentionally want to wipe the model and start over.")
     ap.add_argument("--amp", action="store_true", help="enable mixed-precision training")
     ap.add_argument("--seed", type=int, default=1337)
     ap.add_argument("--mtp-loss-weight", type=float, default=0.20)
@@ -1143,9 +1153,13 @@ def main():
     optim = build_optim(model, args.lr, args.wd)
     scaler = GradScaler(enabled=args.amp and device == "cuda")
     start_step = 0
-    if args.resume and Path(args.resume).exists():
+    if args.no_resume:
+        print(f"--no-resume passed → starting from random init (any existing checkpoint at {args.resume} is ignored)")
+    elif args.resume and Path(args.resume).exists():
         start_step = load_torch_checkpoint(args.resume, model, optim, scaler)
         print(f"resumed from {args.resume} at step {start_step}")
+    elif args.resume:
+        print(f"no checkpoint at {args.resume} yet → first run, training from random init")
 
     log_path = Path(args.log)
     log_path.parent.mkdir(parents=True, exist_ok=True)
