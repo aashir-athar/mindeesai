@@ -1,10 +1,24 @@
 {
   "_doc": [
-    "Training data recipe — 'Broad Brain' mix v4 (Quality-pruned for small-model focus).",
+    "Training data recipe — 'Broad Brain' mix v4.1 (Quality-pruned + gating-safe).",
     "",
     "Goal: train a small model (17M–280M params) toward Claude-Code-ish capability",
     "in code, math, reasoning, and conversational assistant work — while keeping",
     "the 'Mindees' persona on top via --corpus and --distill-corpus weights.",
+    "",
+    "v4.1 CHANGES vs v4:",
+    "  • BigCode gated bigcode/the-stack-smol in 2024. All 6 entries that",
+    "    referenced it would now error with 'You must request access to this",
+    "    dataset' on first load. Replaced with non-gated alternatives:",
+    "      - the-stack-python    → codeparrot/codeparrot-clean (Python, public)",
+    "      - the-stack-solidity  → andstor/smart_contracts (Solidity, public)",
+    "    Dropped (no clean public alternative on HF):",
+    "      - the-stack-typescript, the-stack-javascript: covered by magicoder",
+    "        + codefeedback + opencoder in instruction format (higher signal",
+    "        than raw at small scale anyway)",
+    "      - the-stack-html, the-stack-css: HTML/CSS patterns embedded in",
+    "        the synthetic SFT code blocks. Accept reduced raw-UI signal.",
+    "  • Net: 26 → 22 entries, 48M → 42M tokens, all entries now load.",
     "",
     "v4 CHANGES vs v3:",
     "  • Removed 4 entries with kind='preference' / 'agentic' that the loader",
@@ -210,34 +224,13 @@
       "note": "CODE. Educational code instructions + test-case-oriented examples. Backstop in case The Stack downloads get gated."
     },
     {
-      "name": "the-stack-python",
-      "dataset": "bigcode/the-stack-smol",
-      "config": "data/python",
+      "name": "codeparrot-clean",
+      "dataset": "codeparrot/codeparrot-clean",
       "split": "train",
       "kind": "raw",
       "max_tokens": 3000000,
       "weight": 1.0,
-      "note": "CODE RAW. Real Python from public GitHub — production patterns that don't appear in synthetic instruction data."
-    },
-    {
-      "name": "the-stack-typescript",
-      "dataset": "bigcode/the-stack-smol",
-      "config": "data/typescript",
-      "split": "train",
-      "kind": "raw",
-      "max_tokens": 2000000,
-      "weight": 1.0,
-      "note": "CODE RAW. TypeScript — Next.js / React / web stack vocabulary."
-    },
-    {
-      "name": "the-stack-javascript",
-      "dataset": "bigcode/the-stack-smol",
-      "config": "data/javascript",
-      "split": "train",
-      "kind": "raw",
-      "max_tokens": 2000000,
-      "weight": 0.8,
-      "note": "CODE RAW. JavaScript — JSX patterns, React Native components, Node.js."
+      "note": "CODE RAW. Deduplicated Python from public GitHub via CodeParrot. Replaces bigcode/the-stack-smol[data/python] which BigCode flipped to gated access in 2024. CodeParrot has been public and stable since 2022. Multi-language coverage (TS / JS / etc.) now comes from the synthetic SFT mixes (magicoder, codefeedback, opencoder) rather than raw GitHub — at small scale, instruction-formatted code is higher-signal than raw anyway."
     },
     {
       "name": "metamath",
@@ -285,34 +278,14 @@
       "note": "REASONING. Synthetic reasoning across math/science/code/puzzles. Kept low-weight at small scale — capacity for explicit reasoning is limited below ~280M params."
     },
     {
-      "name": "the-stack-solidity",
-      "dataset": "bigcode/the-stack-smol",
-      "config": "data/solidity",
+      "name": "andstor-smart-contracts",
+      "dataset": "andstor/smart_contracts",
+      "config": "all-plain-text",
       "split": "train",
       "kind": "raw",
       "max_tokens": 1000000,
       "weight": 0.6,
-      "note": "DOMAIN SPICE. Solidity smart contracts. Web3 / blockchain code vocabulary."
-    },
-    {
-      "name": "the-stack-html",
-      "dataset": "bigcode/the-stack-smol",
-      "config": "data/html",
-      "split": "train",
-      "kind": "raw",
-      "max_tokens": 1000000,
-      "weight": 0.6,
-      "note": "DOMAIN SPICE. HTML markup. Visual-structure vocabulary for UI tasks."
-    },
-    {
-      "name": "the-stack-css",
-      "dataset": "bigcode/the-stack-smol",
-      "config": "data/css",
-      "split": "train",
-      "kind": "raw",
-      "max_tokens": 800000,
-      "weight": 0.6,
-      "note": "DOMAIN SPICE. CSS / SCSS. Tailwind-adjacent class vocabulary for UI/UX."
+      "note": "DOMAIN SPICE. Public Solidity smart-contract corpus (~100k+ contracts). Replaces bigcode/the-stack-smol[data/solidity] which is now gated. Note: HTML and CSS raw datasets were dropped — no clean public alternative on HF exists, and synthetic SFT mixes (magicoder, codefeedback) carry HTML/CSS patterns embedded in their code blocks."
     },
     {
       "name": "empathetic-counseling",
