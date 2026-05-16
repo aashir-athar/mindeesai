@@ -91,20 +91,20 @@
     {
       "name": "no-robots",
       "dataset": "HuggingFaceH4/no_robots",
-      "split": "train_sft",
+      "split": "train",
       "kind": "dialogue",
       "max_tokens": 500000,
       "weight": 2.2,
-      "note": "10K examples human-curated by skilled annotators. Zero synthetic. Highest instruction quality per token."
+      "note": "10K examples human-curated by skilled annotators. Zero synthetic. Highest instruction quality per token. NOTE: split is `train` (not `train_sft` like ultrachat — the H4 datasets are inconsistent on this)."
     },
     {
       "name": "oasst1",
       "dataset": "OpenAssistant/oasst1",
       "split": "train",
       "kind": "dialogue",
-      "max_tokens": 2000000,
-      "weight": 2.0,
-      "note": "OpenAssistant Conversations Dataset — fully human-written multi-turn assistant data across thousands of topics. Quality anchoring across business / psychology / advice / general help."
+      "max_tokens": 1000000,
+      "weight": 0.5,
+      "note": "OpenAssistant Conversations Dataset — fully human-written. KNOWN QUIRK: oasst1 is stored as a flat message tree (each row is a single node with parent_id), so load_dialogue_hf can't reassemble proper multi-turn conversations and falls through to flat-token ingestion ('0 conversations → 2M tokens' in the log). The text is still high-quality human writing so we keep it at low weight as a raw-text quality anchor — not as a structured chat signal. If/when load_dialogue_hf gets an oasst1-tree-reassembly path, restore weight to 2.0."
     },
     {
       "name": "openhermes",
