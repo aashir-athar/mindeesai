@@ -67,6 +67,135 @@ export function sanitizeLeakedToolMarkup(text: string): string {
   return out.replace(/[ \t]{2,}/g, " ").replace(/\n{3,}/g, "\n\n").trim();
 }
 
+/**
+ * Strip LaTeX / MathJax markup that the chat UI can't render.
+ *
+ * Every cloud teacher (Groq's Llama-3.x, Gemini, Claude) defaults to
+ * LaTeX for math because the training corpus is dense with it. The chat
+ * UI renders only GitHub-flavoured markdown — so `\[ x = 5 \]` and
+ * `\boxed{153}` arrive as literal backslash text. The system-prompt
+ * rail in lib/persona/mindees.ts tells the model not to do this; this
+ * function is the deterministic backstop for when it does anyway.
+ *
+ * Strategy: rewrite the LaTeX into the closest plain-markdown equivalent.
+ *   - delimiters (\[ \], \( \), $$ $$, $ $)  → strip, keep contents
+ *   - \boxed{X}                              → **X**
+ *   - \frac{a}{b}                            → (a / b)
+ *   - \sqrt{X}                               → sqrt(X)
+ *   - \times \cdot                           → *
+ *   - \div                                   → /
+ *   - \neq                                   → !=
+ *   - \leq \geq \approx                      → <= >= ~
+ *   - \pm \mp                                → +/- -/+
+ *   - \Bigl[ \Bigr] \bigl ...                → [ ]
+ *   - \\                                     → newline
+ *   - any other \command{X}                  → X (keep contents)
+ *   - any other \command                     → (drop)
+ *
+ * Tolerant: each rule runs independently, so a malformed expression
+ * doesn't break the rest of the reply. Idempotent.
+ */
+export function stripLatexToPlainMarkdown(text: string): string {
+  let out = text;
+
+  // 1. \boxed{X} → **X** (final-answer convention)
+  out = out.replace(/\\boxed\s*\{([^{}]*)\}/g, "**$1**");
+
+  // 2. \frac{a}{b} → (a / b). Two-pass to handle nested fractions.
+  for (let i = 0; i < 4; i++) {
+    const before = out;
+    out = out.replace(/\\(?:d?frac|tfrac)\s*\{([^{}]*)\}\s*\{([^{}]*)\}/g, "($1 / $2)");
+    if (out === before) break;
+  }
+
+  // 3. \sqrt[n]{X} → root(n, X), \sqrt{X} → sqrt(X)
+  out = out.replace(/\\sqrt\s*\[([^\]]+)\]\s*\{([^{}]*)\}/g, "root($1, $2)");
+  out = out.replace(/\\sqrt\s*\{([^{}]*)\}/g, "sqrt($1)");
+
+  // 4. Operators → ASCII
+  out = out
+    .replace(/\\times\b/g, "*")
+    .replace(/\\cdot\b/g, "*")
+    .replace(/\\div\b/g, "/")
+    .replace(/\\pm\b/g, "+/-")
+    .replace(/\\mp\b/g, "-/+")
+    .replace(/\\neq\b/g, "!=")
+    .replace(/\\le(?:q)?\b/g, "<=")
+    .replace(/\\ge(?:q)?\b/g, ">=")
+    .replace(/\\approx\b/g, "~=")
+    .replace(/\\sim\b/g, "~")
+    .replace(/\\infty\b/g, "infinity")
+    .replace(/\\implies\b/g, "→")
+    .replace(/\\Longrightarrow\b/g, "→")
+    .replace(/\\Rightarrow\b/g, "→")
+    .replace(/\\rightarrow\b/g, "→")
+    .replace(/\\leftarrow\b/g, "←")
+    .replace(/\\quad\b/g, "  ")
+    .replace(/\\qquad\b/g, "    ")
+    .replace(/\\,/g, " ")
+    .replace(/\\;/g, " ")
+    .replace(/\\:/g, " ")
+    .replace(/\\!/g, "");
+
+  // 5. Bracket-sizing macros → just the bracket
+  out = out
+    .replace(/\\[Bb]igl?\s*\[/g, "[")
+    .replace(/\\[Bb]igr?\s*\]/g, "]")
+    .replace(/\\[Bb]igl?\s*\(/g, "(")
+    .replace(/\\[Bb]igr?\s*\)/g, ")")
+    .replace(/\\[Bb]igl?\s*\\\{/g, "{")
+    .replace(/\\[Bb]igr?\s*\\\}/g, "}")
+    .replace(/\\left\s*([\(\[\{\|])/g, "$1")
+    .replace(/\\right\s*([\)\]\}\|])/g, "$1");
+
+  // 6. \text{X} / \mathrm{X} / \mathbf{X} → X (keep contents, drop wrapper).
+  //    Run this BEFORE the catch-all so nested commands inside \text{} work.
+  out = out.replace(
+    /\\(?:text|mathrm|mathbf|mathit|mathsf|mathtt|mathcal|operatorname|underbrace|overbrace|displaystyle|textstyle|scriptstyle|scriptscriptstyle)\s*\{([^{}]*)\}/g,
+    "$1",
+  );
+
+  // 7. Display-math delimiters \[ ... \], \( ... \) — keep contents, drop delimiters.
+  out = out.replace(/\\\[([\s\S]*?)\\\]/g, (_m, body) => `\n${body.trim()}\n`);
+  out = out.replace(/\\\(([\s\S]*?)\\\)/g, (_m, body) => body.trim());
+
+  // 8. Dollar-delimited math: $$ ... $$ and $ ... $.
+  //    Be careful — single $ also appears in prose (USD prices). Only
+  //    strip $$...$$ unconditionally and $...$ only when the body looks
+  //    like math (no spaces or starts with a digit/letter formula).
+  out = out.replace(/\$\$([\s\S]*?)\$\$/g, (_m, body) => `\n${body.trim()}\n`);
+  out = out.replace(/\$([^\$\n]{1,200})\$/g, (m, body) => {
+    // Heuristic: if the body has ANY backslash command or LaTeX operator,
+    // it's math; otherwise leave as-is (prices etc.).
+    if (/\\|\^\{|_\{|\\frac|\\sqrt/.test(body)) return body;
+    return m;
+  });
+
+  // 9. Line break `\\` → newline
+  out = out.replace(/\\\\(?:\s*\[[\d.]+\w*\])?/g, "\n");
+
+  // 10. Any remaining \command{X} → X (keep inner argument).
+  for (let i = 0; i < 4; i++) {
+    const before = out;
+    out = out.replace(/\\[a-zA-Z]+\s*\{([^{}]*)\}/g, "$1");
+    if (out === before) break;
+  }
+  // 11. Argument-less commands (\alpha, \theta, etc.) → strip backslash, keep name.
+  out = out.replace(/\\([a-zA-Z]+)\b/g, (_m, name) => name);
+
+  // 12. Subscript/superscript braces: 4^{4} → 4^4, x_{i} → x_i.
+  //     Common in cloud-LLM math output even when other LaTeX is absent.
+  out = out.replace(/(\^|_)\{([^{}]+)\}/g, "$1$2");
+
+  // 13. Cleanup: collapse runs of whitespace introduced by stripping.
+  out = out
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/[ \t]{2,}/g, " ");
+
+  return out.trim();
+}
+
 /** Check a partial or full reply for disclaimer leakage. */
 export function detectDisclaimerLeak(text: string): LeakReport {
   for (const re of FORBIDDEN_PATTERNS) {

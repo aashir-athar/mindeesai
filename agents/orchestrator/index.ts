@@ -54,7 +54,7 @@ import {
   decideAutoResearch,
   performAutoResearch,
 } from "@/lib/persona";
-import { detectDisclaimerLeak, buildReanchorForLeak, sanitizeLeakedToolMarkup } from "@/lib/persona/leak-guard";
+import { detectDisclaimerLeak, buildReanchorForLeak, sanitizeLeakedToolMarkup, stripLatexToPlainMarkdown } from "@/lib/persona/leak-guard";
 import { lastJournalEntry } from "@/lib/persona/journal";
 import { readTime } from "@/lib/persona/time-awareness";
 import { recordUserText, signatureVocab } from "@/lib/persona/vocab-mirror";
@@ -554,6 +554,21 @@ export async function* orchestrate(opts: {
     log.warn(`tool-markup leak detected — stripping ${aggregatedText.length - sanitized.length} chars`);
     aggregatedText = sanitized;
     yield { type: "replace-answer", text: sanitized, reason: "tool-markup leak" };
+  }
+
+  // 7d. LaTeX/MathJax STRIPPER — the system prompt rail in lib/persona/
+  //     mindees.ts (OUTPUT_FORMAT_RAIL) tells the model never to emit
+  //     LaTeX, but every cloud teacher (Llama-3, Gemini, Claude) defaults
+  //     to it for math anyway because their training corpus is dense with
+  //     LaTeX. The chat UI renders only markdown, so `\boxed{153}` and
+  //     `\frac{a}{b}` arrive as literal backslash-text. This pass rewrites
+  //     them into plain-markdown equivalents (**153**, (a / b), etc.).
+  //     Idempotent — runs cheap on already-plain text.
+  const delatexed = stripLatexToPlainMarkdown(aggregatedText);
+  if (delatexed !== aggregatedText) {
+    log.info(`latex stripped from reply (${aggregatedText.length} → ${delatexed.length} chars)`);
+    aggregatedText = delatexed;
+    yield { type: "replace-answer", text: delatexed, reason: "latex → plain markdown" };
   }
 
   // 8. Finalize: persist turn, update memory, record drift fingerprint

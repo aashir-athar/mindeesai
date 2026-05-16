@@ -1,11 +1,14 @@
 {
   "name": "calculator",
-  "version": "1.0.0",
-  "description": "Evaluate a mathematical expression deterministically (no LLM). Supports +, -, *, /, %, **, parentheses, and named constants pi/e. Use this whenever you'd otherwise risk an arithmetic mistake.",
+  "version": "2.0.0",
+  "description": "Deterministically evaluate a math expression — no LLM, no eval(). Supports +, -, *, /, %, ^ (exponent), parens (or [] or {}), factorial (N!), Unicode notation (×, ÷, ³, √, π), constants (pi, e, tau, inf), and functions (sqrt, cbrt, abs, floor, ceil, round, ln, log, log2, log10, sin, cos, tan, asin, acos, atan, atan2, exp, min, max, pow, gcd, lcm). Implicit multiplication works: 2(3+4) means 2*(3+4). Use this whenever a calculation would otherwise risk an arithmetic mistake.",
   "parameters": {
     "type": "object",
     "properties": {
-      "expression": { "type": "string", "description": "Math expression, e.g. '(2.5 + 3.1) * 12'" }
+      "expression": {
+        "type": "string",
+        "description": "Math expression. Examples: '(2.5 + 3.1) * 12', 'sqrt(225) + 7!', '5^3 - 3^5', '(4^4 - 56) / (3^2 + 7) * 6', 'log(e^3)'. Unicode like '4³ × √16' is OK too. Max 1024 chars."
+      }
     },
     "required": ["expression"]
   },
