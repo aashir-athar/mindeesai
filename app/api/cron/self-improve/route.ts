@@ -16,7 +16,7 @@
  * The endpoint is idempotent — re-running the same tick is safe.
  */
 
-import { NextRequest, NextResponse, after } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { appendFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { dataPath } from "@/lib/paths";
@@ -110,46 +110,15 @@ export async function POST(req: NextRequest) {
     log.warn("heartbeat write failed", e);
   }
 
-  // ─── EARLY-ACK on Vercel ────────────────────────────────────────────
-  // cron-job.org's free-tier request timeout is 30s, but a full cron tick
-  // (reflect 3 threads + autonomous research + persist) routinely takes
-  // 25-40s. The function eventually completes the work — but cron-job.org
-  // has already disconnected and shows "Failed (timeout)" in its dashboard.
+  // Run the full pipeline synchronously and return the result. Empirical
+  // data: a typical tick on Vercel completes in 7-10s (mostly R2 flush
+  // time; reflect/research stages no-op when there's no fresh signal).
+  // That fits cron-job.org's 30s timeout with plenty of slack.
   //
-  // The fix: on Vercel, return 200 OK immediately so cron-job.org records
-  // a successful invocation, and use Next.js's after() to keep running
-  // the heavy pipeline in the background. The function instance keeps
-  // its full maxDuration window (60s on Hobby) — we're just acknowledging
-  // sooner. The work itself is unchanged.
-  //
-  // Locally (no VERCEL env), we keep the synchronous behaviour because:
-  //   1. there's no 30s wall — local-cron-loop.ps1 waits as long as needed
-  //   2. it's nicer for dev that the response carries the actual stats
-  //   3. after() can be flaky on the dev server's hot-reload boundaries
-  if (IS_VERCEL) {
-    after(async () => {
-      try {
-        await runCronTick({ ranAt, sinceMs, isCronJobOrg });
-      } catch (e) {
-        log.error("cron background task failed", e);
-        try {
-          await appendFile(
-            dataPath("cron-heartbeat.jsonl"),
-            JSON.stringify({ ts: isoNow(), event: "cron-error", message: e instanceof Error ? e.message : String(e) }) + "\n",
-            "utf8",
-          );
-        } catch { /* ignore */ }
-      }
-    });
-    return NextResponse.json({
-      ok: true,
-      status: "accepted",
-      ranAt,
-      note: "cron tick running in background; check /setup or /api/health for outcome",
-    });
-  }
-
-  // ─── LOCAL PATH (synchronous, returns full result) ─────────────────
+  // The earlier after() refactor (see commit eb085f4) was reverted after
+  // /api/health confirmed the background work wasn't actually completing
+  // on Vercel Hobby — even with Fluid Compute enabled the heartbeat and
+  // R2 flush were silently dropping. Synchronous is the durable path here.
   return await runCronTickAndRespond({ ranAt, sinceMs, isCronJobOrg, IS_VERCEL });
 }
 
@@ -157,11 +126,6 @@ interface CronContext {
   ranAt: string;
   sinceMs: number;
   isCronJobOrg: boolean;
-}
-
-/** Background path — runs the full pipeline; result discarded (logs only). */
-async function runCronTick(ctx: CronContext): Promise<void> {
-  await runCronTickAndRespond({ ...ctx, IS_VERCEL: true });
 }
 
 /** Synchronous path — runs the pipeline and builds the full JSON response. */
