@@ -119,7 +119,7 @@ Mindees carries **twenty-three persistent state loops** that adapt automatically
 | **Sleep-cycle themes** | semantic | once every ~22h, the cron consolidates recurring topics across reflections + corrections + delights + affinities into high-weight LanceDB insights | Cron-gated, ~22h interval |
 | **Neural affect (3 models)** | blended | transformers.js running locally: `emotion-distilroberta` (7-class) + `twitter-roberta-sentiment` (sarcasm-aware) + `toxic-bert` (defensive); blended into the 8-dim cues | Per turn, parallel to rule-based read, 2-2.5s timeout fallbacks |
 
-Plus an **auto-research loop**: when Mindees hedges ("I don't know", "let me check") or hits a high-novelty question with no web-search this turn, it fires a Tavily search in the background, persists the passages as recallable memories. Next time you ask about the same area, the prior research surfaces in the system prompt. This is **per-turn self-machine-learning** — separate from the 5-minute cron.
+Plus an **auto-research loop**: when Mindees hedges ("I don't know", "let me check") or hits a high-novelty question with no web-search this turn, it fires a Tavily search in the background, persists the passages as recallable memories. Next time you ask about the same area, the prior research surfaces in the system prompt. This is **per-turn self-machine-learning** — separate from the background cron tick.
 
 Mindees also auto-organises its memory:
 
@@ -155,11 +155,11 @@ Storage split into the right layers for free-tier sustainability:
 
 Every chat turn auto-persists to R2 (including the conversation transcript, so follow-up questions on a different serverless instance still have full thread context). Audit pages hydrate from R2 on cold start. The cron tick is budget-aware: **40s on Vercel Hobby** (fits the 60s function ceiling), **10-minute unbounded locally** for full pipeline runs.
 
-*Why not Vercel Blob:* Hobby caps writes at **2,000/month** — a 5-min cron walking 30+ files burns that in under 3 hours. The persistence layer still supports `vercel-blob` mode (set `BLOB_READ_WRITE_TOKEN`) for low-frequency use, with a circuit-breaker that trips on `store suspended` so a quota wall can't burn dev-server wall-clock on doomed PUTs.
+*Why not Vercel Blob:* Hobby caps writes at **2,000/month** — even a 15-min cron walking 30+ files burns that in days. The persistence layer keeps `vercel-blob` mode as a legacy fallback (set `BLOB_READ_WRITE_TOKEN` if you want it), but **Cloudflare R2 is the recommended and default path**. R2's circuit-breaker logic still applies to either backend if writes start failing.
 
 Triggers:
 - **chat path** — every user message gets 35+ regex-extracted self-disclosure triples added to the graph synchronously, plus a transformers.js NER pass for entities the regex misses, plus an LLM-extracted supplement post-reply.
-- **5-minute external cron** (cron-job.org) — reflect → optimize → autonomous research → journal → reach-out → sleep-cycle → persist. Heavy gradient training is intentionally OFF in the cron tick (set `ENABLE_CRON_TRAINING=1` to opt in on beefy self-hosted runners).
+- **External cron at ~15-min cadence** (cron-job.org → Vercel) — reflect → optimize → autonomous research → journal → reach-out → sleep-cycle → persist. Interval is configurable; 15 min is the safe default for Vercel Hobby's 100 GB-hour/month function-compute budget (5 min would burn the entire quota on the cron alone). Heavy gradient training is intentionally OFF in the cron tick (set `ENABLE_CRON_TRAINING=1` to opt in on beefy self-hosted runners).
 - **Daily Vercel Cron** — redundant fallback declared in `vercel.json` (`0 4 * * *`).
 - **Manual** — `/admin` → "Run cron now" or "Run pretrain now" (one-click GitHub Actions dispatch).
 
@@ -202,7 +202,7 @@ chat turn  →  data/distill-corpus.jsonl + conversations/  →  Cloudflare R2
                             │
               ┌─────────────┴─────────────────────────┐
               ▼                                       ▼
-     5-min cron tick                          weekly GH Action
+     ~15-min cron tick                        weekly GH Action
      (LIGHTWEIGHT loops only:                 (Python pretrain.py:
       reflection promotion,                    home-max variant on local GPU
       autonomous research,                     OR free CPU on Actions,
@@ -229,7 +229,7 @@ chat turn  →  data/distill-corpus.jsonl + conversations/  →  Cloudflare R2
                        smarter chat turn (loop continues)
 ```
 
-The 5-min cron used to also run a CPU gradient step (`selfImproveTick`) but that was disabled by default after testing showed it could hang for 20+ minutes on rate-limited days. Heavy training has two proper homes:
+The cron tick used to also run a CPU gradient step (`selfImproveTick`) but that was disabled by default after testing showed it could hang for 20+ minutes on rate-limited days. Heavy training has two proper homes:
 
 - **`scripts/train/run-home-max.{sh,ps1}`** — local GPU run on consumer hardware. `home-max` variant (~349M params, 16L × 1280) for 12 GB cards; `home-11gb` variant (~280M params, 20L × 1024) for 11 GB usable budgets (RTX 5070 in WSL2). Trains in ~4-6 hours overnight at fp16 with gradient checkpointing.
 - **`.github/workflows/pretrain.yml`** — free CPU on GitHub Actions, ~30-60 min per run, fires every Sunday 03:00 UTC + manual dispatch. Reads the latest distill-corpus from Cloudflare R2, retrains a `small` variant against that fresh signal, and pushes the result to HuggingFace Hub as a **side revision** (`small-weekly` branch of `aashir-athar/mindeesai-base`) so it never overwrites the canonical `main` revision holding your local-GPU checkpoint.
@@ -252,7 +252,7 @@ Both training paths upload `checkpoints/base.bin` to **HuggingFace Hub** (`aashi
 
 ### Self-improvement (the brain rewires itself)
 
-- **Real gradient descent every 5 minutes** — full per-layer backward pass through every LoRA adapter, RMSNorm, and the embedding table. AdamW step. Not a prompt rewrite.
+- **Real gradient descent** — full per-layer backward pass through every LoRA adapter, RMSNorm, and the embedding table. AdamW step. Not a prompt rewrite. Heavy training runs via the weekly GitHub Actions workflow + your local GPU's `run-home-max.{sh,ps1}` (the in-cron training tick is opt-in only, gated behind `ENABLE_CRON_TRAINING=1`, because CPU gradient steps on a rate-limited day used to hang for 20+ minutes).
 - **GRPO (Group Relative Policy Optimization)** — the RL method that made DeepSeek-R1 reach o1-class reasoning. No reward model needed.
 - **Constitutional self-critique** — the model drafts, the critic flags, the model refines. Refined drafts feed back into training.
 - **Curriculum self-play** — when the critic is uncertain, the model generates targeted questions and trains on critic-approved answers.
@@ -319,7 +319,7 @@ Both training paths upload `checkpoints/base.bin` to **HuggingFace Hub** (`aashi
 | Local ML | **transformers.js (9 models)** | Embedder · reranker · emotion · sentiment · NER · toxicity · **PII guard · zero-shot topic router · local thread summariser** — all Q8, all free, ~705 MB resident if all loaded simultaneously (lazy in practice). |
 | Validation | **Zod** | Type-safe request/response shapes everywhere. |
 | Streaming | **Native SSE + ReadableStream** | No vendor SDK lock-in. Per-chunk 25s stall timeout. |
-| Cron | **cron-job.org (5-min) + Vercel Cron (daily fallback)** | Free 1-minute granularity from cron-job.org; Vercel's daily cron as belt-and-braces. |
+| Cron | **cron-job.org (~15-min) + Vercel Cron (daily fallback)** | Free, configurable interval. 15 min is the recommended Hobby cadence (5 min would burn the 100 GB-hr/mo function quota). Vercel's daily cron is belt-and-braces. |
 | LLM router | **7-deep free-tier fallback chain** | Auto-walks on 429 / 5xx / stream stalls. Effective daily budget: 5× Groq TPD + Gemini Flash. |
 | Deployment | **Vercel Hobby (free)** | Push-to-deploy. Heavy training on free GitHub Actions CPU or local GPU. |
 | Checkpoint storage | **HuggingFace Hub** | `aashir-athar/mindeesai-base`. Unlimited free public storage, $0 egress; cold-start downloader caches `base.bin` to `/tmp`. |
@@ -348,7 +348,7 @@ Both training paths upload `checkpoints/base.bin` to **HuggingFace Hub** (`aashi
 │   SSE encoder  ──► tokens stream to client                                          │
 └─────────────────────────────────────────────────────────────────────────────────────┘
                                                     ▲
-                                                    │ every 5 minutes
+                                                    │ every ~15 minutes
                             ┌───────────────────────┴────────────────────────┐
                             │           cron-job.org webhook                 │
                             │   POST /api/cron/self-improve  (Bearer auth)   │
@@ -374,7 +374,7 @@ flowchart LR
   T -- result --> M
   M --> A[Assistant tokens via SSE]
   A --> JL[(data/conversations/*.jsonl)]
-  JL -- every 5 min --> CR{{cron: self-improve}}
+  JL -- every ~15 min --> CR{{cron: self-improve}}
   CR --> R[Reflector]
   R --> O2[Optimizer]
   O2 -- gradient step --> M
@@ -497,9 +497,9 @@ After the deploy completes, add storage for runtime state. Two free-tier options
   3. Add four env vars on Vercel: `R2_ACCOUNT_ID`, `R2_BUCKET`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`.
   4. Redeploy. `MEMORY_PERSISTENCE` auto-detects `cloudflare-r2`.
 
-- **Alternative — Vercel Blob** (1 GB / **2k writes/mo on Hobby — quota burns fast**):
+- **Legacy fallback — Vercel Blob** (1 GB / **2k writes/mo on Hobby — quota burns in days**):
   - Storage → Blob → Connect Store. `BLOB_READ_WRITE_TOKEN` is auto-injected.
-  - Acceptable for low-traffic dev, NOT recommended for an active cron loop.
+  - The code still supports it (set `MEMORY_PERSISTENCE=vercel-blob`), but it's no longer the recommended path. R2 has 500× the write quota and zero egress fees.
 
 Then push your trained checkpoint to HuggingFace:
 
@@ -518,9 +518,9 @@ Visit `https://<your-project>.vercel.app/chat`, and your model is live. The cold
 |---|---|---|
 | `framework` | `nextjs` | Native Next.js 16 build. |
 | `regions` | `iad1` (Washington D.C.) | Pinned to keep cold-start + latency consistent. Change to your nearest region. |
-| `crons` | `/api/cron/self-improve @ */5 * * * *` | Built-in Vercel Cron triggers the self-improvement loop. Cron-job.org is a *backup* option, not a requirement. |
-| `functions.cron.maxDuration` | `300` (Pro) | Long enough for forward+backward+eval-gate+rollback. |
-| `functions.cron.memory` | `3008` MB | The native model + LoRA gradients + eval harness all in one function. |
+| `crons` | `/api/cron/self-improve @ 0 4 * * *` | Built-in Vercel Cron (Hobby = 1/day max). The real cadence comes from **cron-job.org** at a configurable interval (~15 min recommended). |
+| `functions.cron.maxDuration` | `60` (Hobby) | 40s budget after overhead; heavy training is skipped from cron and runs via the weekly GH Action / your local GPU instead. |
+| `functions.cron.memory` | `1769` MB | Enough for the orchestrator + transformers.js stack. |
 | `functions.chat.maxDuration` | `60` | Streaming chat respects user attention. |
 | `headers` | strict security defaults | nosniff, deny-frame, no-store on `/api/*`. |
 | `redirects` | `/github`, `/docs` | Friendly short URLs you can share. |
@@ -739,7 +739,7 @@ To **run** MindeesAI: no. The `nano` and `small` variants infer in pure JavaScri
 
 It uses the same architectural ingredients as DeepSeek-V3 (MoE, MLA, MTP, GRPO) and Llama 4 (GQA, RoPE, RMSNorm, SwiGLU). The recipe is the same; what differs is **scale** — DeepSeek-V3 trained at 671B params on 14.8T tokens with thousands of H100s. MindeesAI's default `small` variant is ~50M params, trainable on a single laptop. The `moe-base` variant is ~1B total with ~250M active per token.
 
-**What MindeesAI offers that the frontier models don't:** full ownership, real continual learning every 5 minutes, an auditable improvement log with regression-gated rollback, zero vendor lock-in, a codebase you can read end-to-end. At your scale, with your data, it will beat any model that doesn't remember you.
+**What MindeesAI offers that the frontier models don't:** full ownership, real continual learning every ~15 minutes (configurable), an auditable improvement log with regression-gated rollback, zero vendor lock-in, a codebase you can read end-to-end. At your scale, with your data, it will beat any model that doesn't remember you.
 
 </details>
 
@@ -758,9 +758,9 @@ For questions that the difficulty estimator flags as hard (math, code, multi-ste
 </details>
 
 <details>
-<summary><b>What does the 5-minute cron actually do now?</b></summary>
+<summary><b>What does the cron tick actually do now?</b></summary>
 
-A lot. Per tick, the optimizer (`agents/optimizer/index.ts`) calls `selfImproveTick()` which:
+(Cadence is configurable; ~15 min is the safe default on Vercel Hobby. Locally you can fire much faster — the dev cron loop polls at whatever interval you set.) Per tick, the optimizer (`agents/optimizer/index.ts`) calls `selfImproveTick()` which:
 1. Snapshots the current LoRA state for rollback.
 2. Runs the eval harness BEFORE (perplexity + reasoning + recall@3).
 3. Curates a microbatch from conversations, reflections, curriculum self-play, constitutional self-critique pairs, DPO preference pairs, and the replay buffer — through dedup + quality + curriculum filters.
@@ -785,7 +785,7 @@ Add a folder under `connectors/` with three files: `manifest.json`, `handler.ts`
 <details>
 <summary><b>Is my data sent anywhere?</b></summary>
 
-By default, **no**. Inference happens in-process. Long-term memory is a local LanceDB folder. The 5-minute cron only POSTs from cron-job.org to *your* Vercel URL. The only outbound calls are when (a) you call a connector that explicitly needs the network (e.g., `web-search`), or (b) you've configured an optional vendor LLM key for fallback. Disable both and the system is air-gappable.
+By default, **no**. Inference happens in-process. Long-term memory is a local LanceDB folder (mirrored to your own Cloudflare R2 bucket on Vercel deployments — you own the bucket). The cron tick only POSTs from cron-job.org to *your* Vercel URL. The only outbound calls are when (a) you call a connector that explicitly needs the network (e.g., `web-search`), or (b) you've configured an optional vendor LLM key for fallback. Disable both and the system is air-gappable.
 
 </details>
 
@@ -830,7 +830,7 @@ Built by [**Aashir Athar**](https://github.com/aashir-athar)
 
 <!--
 GitHub repo "About" blurb (copy this into Settings → About):
-  A native, self-training open-source AI. Trains itself every 5 minutes — own weights, own tokenizer, own brain. Next.js 16 + TypeScript + LoRA online learning.
+  A native, self-training open-source AI. Continual learning loop with configurable cadence (~15 min default) — own weights, own tokenizer, own brain. Next.js 16 + TypeScript + LoRA online learning.
 
 Topics to add (Settings → Topics):
   ai, llm, open-source-llm, self-training, continual-learning, lora, dpo,
