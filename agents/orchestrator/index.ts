@@ -106,6 +106,74 @@ export async function* orchestrate(opts: {
   };
   await appendMessage(threadId, userTurn);
 
+  // 1a. MATH-SKILL FAST PATH.
+  //     If the user message is a pure math expression (no natural-language
+  //     prose words, mostly digits + operators + Unicode math), bypass the
+  //     LLM entirely. We run the calculator directly (~1ms), format a
+  //     Mindees-voice reply, persist, and finish — total wall-clock
+  //     usually under 100ms vs the 15-60s a tool-call round-trip costs.
+  //     Persona tensor updates fire in the background so the model still
+  //     "feels" the math turn even though no LLM was involved.
+  //
+  //     Detection is conservative — anything with "explain", "show",
+  //     "how", "why", "please" falls through to the normal LLM path so
+  //     the user gets prose when they want prose.
+  {
+    const mathExpr = (await import("@/lib/skills/math-skill")).detectMathExpression(userMessage);
+    if (mathExpr) {
+      const { runMathSkill } = await import("@/lib/skills/math-skill");
+      const skillResult = await runMathSkill(mathExpr, signal);
+      if (skillResult) {
+        log.info(`math-skill fast path fired (${skillResult.durationMs.toFixed(1)}ms): ${skillResult.value}`);
+        // Bump mood: math = curiosity satisfied
+        void readAffect(userMessage);
+        // Yield in the same event-stream shape as the normal hop loop so
+        // the chat-canvas treats it identically.
+        yield { type: "stage", stage: "math-skill" };
+        yield { type: "tool-start", name: "calculator", args: { expression: mathExpr }, callId: nid() };
+        yield { type: "tool-end", name: "calculator", callId: "math-skill", ok: true, ms: skillResult.durationMs };
+        yield { type: "text", text: skillResult.text };
+
+        const finalAssistant: Message = {
+          id: nid(),
+          role: "assistant",
+          content: skillResult.text,
+          createdAt: isoNow(),
+          modelId: "skill:math",
+        };
+        await appendMessage(threadId, finalAssistant);
+
+        // Persist + memory writes fire in background so the user gets
+        // their answer first.
+        void rememberMany([
+          { id: userTurn.id, text: userTurn.content, threadId, role: "user", source: "conversation", createdAt: userTurn.createdAt },
+          { id: finalAssistant.id, text: finalAssistant.content, threadId, role: "assistant", source: "conversation", createdAt: finalAssistant.createdAt },
+        ]).catch((e) => log.warn("memory write failed", e));
+
+        // Thread metadata + title (first turn only)
+        const priorMeta = await getMeta(threadId);
+        const isFirstTurn = !priorMeta || priorMeta.turns === 0;
+        await touchMeta(threadId, {
+          turns: (priorMeta?.turns ?? 0) + 1,
+          preview: priorMeta?.preview || userMessage.slice(0, 120),
+          lastUserMsg: userMessage.slice(0, 120),
+          lastAssistantMsg: finalAssistant.content.slice(0, 120),
+        });
+        if (isFirstTurn) {
+          // No LLM call here — for math threads, use a generic title from
+          // the expression itself rather than burning Groq quota on it.
+          const title = `Calculation · ${mathExpr.slice(0, 32)}${mathExpr.length > 32 ? "…" : ""}`;
+          void touchMeta(threadId, { title }).catch(() => {});
+        }
+
+        yield { type: "finish", message: finalAssistant };
+
+        try { await persistPersonaQuick(); } catch (e) { log.warn("persona quick-flush after math-skill failed", e); }
+        return;
+      }
+    }
+  }
+
   // 1b. Triple extraction — TWO synchronous-ish passes that grow the
   //     knowledge graph on every user message at zero LLM cost:
   //
