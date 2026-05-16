@@ -1,23 +1,36 @@
-name: Pretrain MindeesAI (small)
+name: Weekly retrain (small variant, R2 → HF)
 
-# Runs the Python pretraining script on a GitHub-hosted CPU runner.
-# Free for public repos (2000 minutes/month on the standard `ubuntu-latest`).
+# Runs the Python pretraining script on a GitHub-hosted CPU runner every
+# week. Free for public repos (2000 min/month on ubuntu-latest; a small
+# 2000-step run finishes in ~30-60 minutes, so we use <4 hours/month).
 #
 # Triggers:
-#   - Manually from the Actions tab (workflow_dispatch)
-#   - Automatically on any push to a `train/*` branch
-#   - On a weekly schedule (Sundays at 03:00 UTC) so the model keeps
-#     accumulating training over time without anyone clicking anything
+#   - workflow_dispatch (manual via Actions tab, with variant/steps inputs)
+#   - schedule: every Sunday at 03:00 UTC (the "weekly self-learning tick")
 #
-# Output:
-#   - tokenizer/tokenizer.json    (BPE trained on the corpus)
-#   - checkpoints/base.bin        (TS-loadable native model checkpoint)
-#   - both uploaded as workflow artifacts; can be downloaded + committed
-#     back to the repo, or pushed to Vercel Blob via the helper script.
+# Data flow:
+#   1. Fetches the latest distill-corpus.jsonl + distill-feedback.jsonl
+#      from Cloudflare R2 (where the running Vercel app writes them).
+#   2. Trains the `small` variant on CPU for ~2000 steps (~50M params,
+#      ~30-60 min). This is INTENTIONALLY tiny — its purpose is to keep
+#      the self-learning data pipeline exercised, not to compete with
+#      the user's local-GPU home-11gb training.
+#   3. Pushes the resulting checkpoint to HuggingFace Hub as a SIDE
+#      REVISION (`small-weekly` branch of aashir-athar/mindeesai-base).
+#      This way it never overwrites the canonical `main` revision that
+#      holds the user's local-trained home-11gb checkpoint.
 #
-# CPU-only training of the `nano` variant: ~12M params, ~2000 steps, ~30min.
-# Won't beat Groq, but the checkpoint is REAL — not random init — and
-# loading it into the TS runtime exercises the full pipeline end-to-end.
+# Secrets required (Settings → Secrets and variables → Actions):
+#   R2_ACCOUNT_ID         — Cloudflare account ID
+#   R2_BUCKET             — R2 bucket name
+#   R2_ACCESS_KEY_ID      — R2 API access key
+#   R2_SECRET_ACCESS_KEY  — R2 API secret
+#   HF_TOKEN              — HuggingFace write-scoped token
+#
+# If any R2_* is missing, the workflow falls back to training on the seed
+# corpus + dialogue dataset only — never crashes the run.
+# If HF_TOKEN is missing, the workflow still uploads the GH Actions
+# artifact (downloadable from the run page) so you can pull manually.
 
 on:
   workflow_dispatch:
@@ -37,23 +50,28 @@ on:
         required: false
         default: '4'
       hf_dataset:
-        description: 'Optional HuggingFace dataset for streaming augmentation (e.g. roneneldan/TinyStories)'
+        description: 'Optional HuggingFace dataset (e.g. roneneldan/TinyStories). Empty to skip.'
         required: false
-        default: ''
+        default: 'roneneldan/TinyStories'
       hf_max_tokens:
         description: 'Cap on tokens streamed from HF (RAM bound)'
         required: false
         default: '500000'
       dialogue_dataset:
-        description: 'Public HF Parquet dialogue/instruction dataset (databricks/databricks-dolly-15k | HuggingFaceH4/ultrachat_200k | tatsu-lab/alpaca | roneneldan/TinyStories). Empty to skip.'
+        description: 'HF dialogue dataset (databricks/databricks-dolly-15k | HuggingFaceH4/ultrachat_200k | empty)'
         required: false
         default: 'databricks/databricks-dolly-15k'
-  push:
-    branches:
-      - 'train/**'
+      mix_config:
+        description: 'Optional --mix-config path (e.g. scripts/data/mix-broadbrain.json). Empty for simple two-dataset mix.'
+        required: false
+        default: ''
   schedule:
-    # Sundays 03:00 UTC. GitHub may delay scheduled runs by up to ~30 min.
+    # Sundays at 03:00 UTC. GitHub may delay scheduled runs by up to ~30 min.
     - cron: '0 3 * * 0'
+
+env:
+  HF_REPO: aashir-athar/mindeesai-base
+  HF_REVISION: small-weekly
 
 jobs:
   pretrain:
@@ -72,91 +90,97 @@ jobs:
           python-version: '3.11'
           cache: 'pip'
 
-      - name: Install training deps (CPU-only torch)
+      - name: Install training deps (CPU-only torch + R2/HF clients)
         run: |
           python -m pip install --upgrade pip
           # CPU wheel of torch — avoids GPU build sizes
           pip install --index-url https://download.pytorch.org/whl/cpu torch
           pip install -r scripts/train/requirements.txt
+          pip install boto3 huggingface_hub
 
       - name: Ensure corpus exists
         run: ls -lh scripts/data/corpus.txt
 
-      # Pull the live distillation corpus from Vercel Blob if present.
-      # The running app appends every chat turn to data/distill-corpus.jsonl
-      # and flushes it to Blob after each turn + after every cron tick. We
-      # want the LATEST version as training signal here. Best-effort:
-      # missing blob / missing token → training falls back to the seed
-      # corpus only, no failure.
-      - name: Fetch distillation corpus from Vercel Blob
+      # Pull the latest distill-corpus.jsonl from Cloudflare R2. The
+      # running Vercel app's persistence layer writes there after every
+      # chat turn and every cron tick. Without this step the training
+      # would run only on the seed corpus and never see real chat data.
+      - name: Fetch distill corpus from Cloudflare R2
         env:
-          BLOB_RW_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
+          R2_ACCOUNT_ID:        ${{ secrets.R2_ACCOUNT_ID }}
+          R2_BUCKET:            ${{ secrets.R2_BUCKET }}
+          R2_ACCESS_KEY_ID:     ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         run: |
           mkdir -p data
           python - <<'PY'
-          import json, os, sys, urllib.request, urllib.error
-          token = os.environ.get("BLOB_RW_TOKEN", "")
-          if not token:
-              print("✗ no BLOB_READ_WRITE_TOKEN secret in this repo")
-              print("  → set it in Settings → Secrets and variables → Actions")
-              print("  → training will use seed + dialogue corpora only")
+          import os, sys
+          acct = os.environ.get("R2_ACCOUNT_ID", "")
+          bucket = os.environ.get("R2_BUCKET", "")
+          ak = os.environ.get("R2_ACCESS_KEY_ID", "")
+          sk = os.environ.get("R2_SECRET_ACCESS_KEY", "")
+          if not (acct and bucket and ak and sk):
+              print("✗ R2 secrets missing — training will use seed + dialogue corpora only.")
+              print("  Set R2_ACCOUNT_ID / R2_BUCKET / R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY")
+              print("  in Settings → Secrets and variables → Actions.")
               sys.exit(0)
-          print(f"✓ BLOB_READ_WRITE_TOKEN present ({len(token)} chars)")
 
-          # List the prefix to see what IS in the store (helps diagnose
-          # "why isn't my chat data here yet")
-          req = urllib.request.Request(
-              "https://blob.vercel-storage.com/?prefix=data/&limit=20",
-              headers={"Authorization": f"Bearer {token}"},
-          )
           try:
-              with urllib.request.urlopen(req, timeout=30) as resp:
-                  data = json.loads(resp.read())
-          except urllib.error.HTTPError as e:
-              print(f"✗ blob list failed: HTTP {e.code} {e.reason}")
-              print(f"  check that BLOB_READ_WRITE_TOKEN is the RW (not RO) token")
-              sys.exit(0)
+              import boto3
+              from botocore.config import Config as BotoConfig
+          except ImportError as e:
+              print(f"✗ boto3 unavailable: {e}"); sys.exit(0)
+
+          s3 = boto3.client(
+              "s3",
+              endpoint_url=f"https://{acct}.r2.cloudflarestorage.com",
+              aws_access_key_id=ak,
+              aws_secret_access_key=sk,
+              region_name="auto",
+              config=BotoConfig(signature_version="s3v4"),
+          )
+
+          # First, list what's actually under data/ so the log shows the
+          # store state if something is missing.
+          try:
+              resp = s3.list_objects_v2(Bucket=bucket, Prefix="data/", MaxKeys=20)
           except Exception as e:
-              print(f"✗ blob list error: {e}"); sys.exit(0)
+              print(f"✗ R2 LIST failed: {e}")
+              print(f"  check that R2_ACCESS_KEY_ID has Read+Write scope on {bucket}")
+              sys.exit(0)
+          contents = resp.get("Contents", [])
+          print(f"✓ R2 list ok: {len(contents)} object(s) under data/ in {bucket}")
+          for it in contents[:10]:
+              print(f"  - {it['Key']} ({it['Size']} bytes)")
 
-          blobs = data.get("blobs", [])
-          print(f"✓ blob list ok: {len(blobs)} files under data/ prefix")
-          for b in blobs[:10]:
-              print(f"  - {b.get('pathname','?')} ({b.get('size',0)} bytes)")
-
-          # Helper to pull a single blob given its blob-list entry.
-          def _pull(entry, local_path):
-              url = entry.get("downloadUrl") or entry.get("url")
-              if not url:
-                  print(f"  ✗ {entry.get('pathname','?')} has no url"); return 0
+          def _pull(key, dest):
               try:
-                  with urllib.request.urlopen(url, timeout=60) as resp:
-                      body = resp.read()
+                  s3.download_file(bucket, key, dest)
+                  return os.path.getsize(dest)
               except Exception as e:
-                  print(f"  ✗ download error for {entry.get('pathname','?')}: {e}"); return 0
-              with open(local_path, "wb") as f:
-                  f.write(body)
-              return len(body)
+                  print(f"  ✗ download {key} failed: {e}")
+                  return 0
 
-          distill = next((b for b in blobs if b.get("pathname") == "data/distill-corpus.jsonl"), None)
-          if not distill:
+          # data/distill-corpus.jsonl is the chat-turn-by-chat-turn training
+          # signal. If it's missing here, either no chat happened yet, or
+          # the deployed app isn't in cloudflare-r2 mode.
+          keys_here = {it["Key"] for it in contents}
+          if "data/distill-corpus.jsonl" not in keys_here:
               print()
-              print("✗ no data/distill-corpus.jsonl in Blob.")
-              print("  This means: the app hasn't flushed the distill corpus yet. Two reasons:")
-              print("    1. No chat turns have happened in production yet.")
-              print("    2. MEMORY_PERSISTENCE env var is not set to 'vercel-blob' on Vercel.")
+              print("✗ data/distill-corpus.jsonl not in R2.")
+              print("  Two possible reasons:")
+              print("    1. No chat turns have happened yet on the deployed Vercel app.")
+              print("    2. MEMORY_PERSISTENCE on Vercel is not 'cloudflare-r2'")
+              print("       (auto-detects when R2_* env vars are present + MEMORY_PERSISTENCE unset).")
               print("  Training will proceed on seed + dialogue corpora only.")
               sys.exit(0)
-
-          sz = _pull(distill, "data/distill-corpus.jsonl")
+          sz = _pull("data/distill-corpus.jsonl", "data/distill-corpus.jsonl")
           if sz:
-              n = sz  # rough; ok for log
               print(f"✓ fetched distill-corpus.jsonl ({sz:,} bytes)")
 
-          # Also pull thumb-feedback if present — enables RLHF-lite filtering in pretrain.
-          feedback = next((b for b in blobs if b.get("pathname") == "data/distill-feedback.jsonl"), None)
-          if feedback:
-              fsz = _pull(feedback, "data/distill-feedback.jsonl")
+          # Optional 👍/👎 RLHF-lite filter file.
+          if "data/distill-feedback.jsonl" in keys_here:
+              fsz = _pull("data/distill-feedback.jsonl", "data/distill-feedback.jsonl")
               if fsz:
                   print(f"✓ fetched distill-feedback.jsonl ({fsz:,} bytes) — RLHF-lite filtering active")
           else:
@@ -182,7 +206,7 @@ jobs:
           BATCH="${{ github.event.inputs.batch || '4' }}"
           mkdir -p checkpoints data
           HF_ARGS=""
-          HF_DS="${{ github.event.inputs.hf_dataset || '' }}"
+          HF_DS="${{ github.event.inputs.hf_dataset || 'roneneldan/TinyStories' }}"
           HF_MAX="${{ github.event.inputs.hf_max_tokens || '500000' }}"
           if [ -n "$HF_DS" ]; then
             HF_ARGS="--hf-dataset $HF_DS --hf-max-tokens $HF_MAX --hf-weight 2.0"
@@ -195,6 +219,11 @@ jobs:
           DISTILL_ARGS=""
           if [ -s data/distill-corpus.jsonl ]; then
             DISTILL_ARGS="--distill-corpus data/distill-corpus.jsonl"
+          fi
+          MIX_ARGS=""
+          MIX_CFG="${{ github.event.inputs.mix_config || '' }}"
+          if [ -n "$MIX_CFG" ] && [ -f "$MIX_CFG" ]; then
+            MIX_ARGS="--mix-config $MIX_CFG"
           fi
           python scripts/train/pretrain.py \
             --variant "$VARIANT" \
@@ -215,17 +244,31 @@ jobs:
             $DISTILL_ARGS \
             $HF_ARGS \
             $DIALOGUE_ARGS \
+            $MIX_ARGS \
             --log data/training-metrics.jsonl \
             --out checkpoints/base.bin \
             --torch-ckpt checkpoints/torch-resume.pt
 
-      - name: Show metrics tail
+      - name: Show training summary
         run: |
           echo "--- Last 10 training-log lines ---"
           tail -n 10 data/training-metrics.jsonl || true
+          echo ""
           echo "--- Checkpoint size ---"
           ls -lh checkpoints/ || true
+          echo ""
+          # Sanity check — abort the upload if the checkpoint is suspiciously small
+          # (probably training crashed early and left a stub file).
+          SIZE=$(stat -c%s checkpoints/base.bin 2>/dev/null || echo 0)
+          if [ "$SIZE" -lt 1000000 ]; then
+            echo "::error::checkpoint suspiciously small ($SIZE bytes) — refusing to push to HF"
+            exit 1
+          fi
+          echo "✓ checkpoint size sanity check passed ($SIZE bytes)"
 
+      # Always upload the GH Actions artifact — downloadable from the run
+      # page for 30 days, useful as a fallback if the HF push fails or you
+      # want to inspect the exact bytes the workflow produced.
       - name: Upload checkpoint artifact
         uses: actions/upload-artifact@v4
         with:
@@ -237,50 +280,69 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
-      # Auto-upload the freshly trained checkpoint to Vercel Blob so the
-      # next Mindees cold start hydrates the trained weights automatically.
-      # Skipped if BLOB_READ_WRITE_TOKEN isn't set (forks / local-only).
-      - name: Push checkpoint to Vercel Blob
-        if: ${{ env.BLOB_RW_TOKEN != '' }}
+      # Push the trained checkpoint to a SIDE REVISION of the HF repo so
+      # it never overwrites the canonical `main` revision (which holds
+      # the local-GPU home-11gb checkpoint). To activate this small model
+      # in production, set HF_MODEL_REVISION=small-weekly on Vercel.
+      # No `if:` gating — the Python script below checks $HF_TOKEN at
+      # runtime and exits cleanly with a friendly message if it's empty
+      # (GH Actions doesn't allow secrets.* in if expressions, only env.*).
+      - name: Push checkpoint to HuggingFace Hub (side revision)
         env:
-          BLOB_RW_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
+          HF_TOKEN:    ${{ secrets.HF_TOKEN }}
+          HF_REPO:     ${{ env.HF_REPO }}
+          HF_REVISION: ${{ env.HF_REVISION }}
         run: |
           python - <<'PY'
-          import os, sys, urllib.request, urllib.error
-          token = os.environ.get("BLOB_RW_TOKEN", "")
+          import os, sys
+          token = os.environ.get("HF_TOKEN", "")
           if not token:
-              print("no BLOB_RW_TOKEN secret — skipping upload"); sys.exit(0)
-          # Note: the checkpoints/ blob prefix maps to CHECKPOINTS_DIR on the
-          # serverless side (which is /tmp/checkpoints on Vercel). Putting it
-          # under that prefix — instead of nested under lancedb/ — means the
-          # native model's checkpoint loader finds it on cold-start hydrate.
+              print("· no HF_TOKEN secret — skipping HF push (artifact still available above)")
+              sys.exit(0)
+          try:
+              from huggingface_hub import HfApi, create_repo, create_branch
+          except ImportError as e:
+              print(f"✗ huggingface_hub unavailable: {e}"); sys.exit(0)
+
+          repo_id = os.environ.get("HF_REPO", "aashir-athar/mindeesai-base")
+          revision = os.environ.get("HF_REVISION", "small-weekly")
+          api = HfApi(token=token)
+
+          # Make sure repo + branch exist (idempotent — exist_ok=True).
+          try:
+              create_repo(repo_id, repo_type="model", exist_ok=True, private=False, token=token)
+          except Exception as e:
+              print(f"✗ repo verify failed: {e}"); sys.exit(0)
+          try:
+              create_branch(repo_id, branch=revision, exist_ok=True, token=token)
+          except Exception as e:
+              print(f"· create_branch warning (often fine if branch already exists): {e}")
+
           targets = [
-            ("checkpoints/base.bin",        "checkpoints/base.bin"),
-            ("tokenizer/tokenizer.json",    "data/tokenizer.json"),
-            ("data/training-metrics.jsonl", "data/training-metrics.jsonl"),
+              ("checkpoints/base.bin",         "base.bin"),
+              ("tokenizer/tokenizer.json",     "tokenizer.json"),
+              ("data/training-metrics.jsonl",  "training-metrics.jsonl"),
           ]
           uploaded = 0
-          for local, blob_path in targets:
+          for local, in_repo in targets:
               if not os.path.exists(local):
                   print(f"  skip {local} — missing"); continue
-              with open(local, "rb") as f:
-                  body = f.read()
-              req = urllib.request.Request(
-                  f"https://blob.vercel-storage.com/{blob_path}",
-                  data=body,
-                  method="PUT",
-                  headers={
-                      "Authorization": f"Bearer {token}",
-                      "x-content-type": "application/octet-stream",
-                      "x-add-random-suffix": "0",
-                      "x-allow-overwrite": "1",
-                  },
-              )
               try:
-                  with urllib.request.urlopen(req, timeout=120) as resp:
-                      print(f"  uploaded {local} -> {blob_path} ({resp.status})")
-                      uploaded += 1
-              except urllib.error.HTTPError as e:
-                  print(f"  failed {local}: {e.code} {e.reason}")
-          print(f"\nuploaded {uploaded}/{len(targets)} files to Vercel Blob")
-          PY
+                  api.upload_file(
+                      path_or_fileobj=local,
+                      path_in_repo=in_repo,
+                      repo_id=repo_id,
+                      revision=revision,
+                      commit_message=f"weekly retrain run #{os.environ.get('GITHUB_RUN_NUMBER','?')}",
+                  )
+                  print(f"  ✓ uploaded {local} → {repo_id}@{revision}:{in_repo}")
+                  uploaded += 1
+              except Exception as e:
+                  print(f"  ✗ upload {local} failed: {e}")
+          print()
+          print(f"uploaded {uploaded}/{len(targets)} files to {repo_id}@{revision}")
+          print(f"to activate this checkpoint on Vercel, set HF_MODEL_REVISION={revision}")
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_REPO: ${{ env.HF_REPO }}
+          HF_REVISION: ${{ env.HF_REVISION }}
