@@ -106,8 +106,13 @@ export function detectMathExpression(message: string): string | null {
 export interface MathSkillResult {
   /** Pre-formatted reply ready to emit to the chat UI. */
   text: string;
-  /** The numeric result for downstream metrics + memory. */
-  value: number;
+  /** The result for downstream metrics + memory. May be a number (scalar),
+   *  or a string for symbolic / complex / matrix / unit results. */
+  value: number | string;
+  /** What kind of object the result is. */
+  kind: "number" | "fraction" | "complex" | "matrix" | "unit" | "bignumber" | "string";
+  /** Which engine produced it: "mathjs" (full CAS) or "builtin" (fallback). */
+  engine: "mathjs" | "builtin";
   /** The expression after Unicode normalisation — useful for the audit log. */
   normalised: string;
   /** Wall-clock time the calculator took, milliseconds. */
@@ -143,13 +148,20 @@ export async function runMathSkill(
       log.info(`math-skill: calculator rejected (${result.error}); falling back to LLM`);
       return null;
     }
-    const out = result.output as { value: number; expression: string; normalised: string };
-    if (typeof out.value !== "number" || !Number.isFinite(out.value)) {
-      return null;
-    }
+    const out = result.output as {
+      value: number | string;
+      kind?: MathSkillResult["kind"];
+      display?: string;
+      engine?: MathSkillResult["engine"];
+      normalised?: string;
+    };
+    const kind = out.kind ?? "number";
+    const engine = out.engine ?? "builtin";
     return {
-      text: formatReply(out.value, out.normalised ?? expression),
+      text: formatReply(out.value, kind, out.display ?? String(out.value), out.normalised ?? expression),
       value: out.value,
+      kind,
+      engine,
       normalised: out.normalised ?? expression,
       durationMs,
     };
@@ -160,18 +172,35 @@ export async function runMathSkill(
 }
 
 /**
- * Build a clean Mindees-voice reply around the numeric answer. Keeps the
- * persona register (first-person, no "as an AI") while staying terse —
- * a pure math question deserves a pure number, not three paragraphs.
+ * Build a clean Mindees-voice reply around the answer. Handles every
+ * result kind the calculator can produce: numbers, fractions, complex,
+ * matrices, units, big numbers, symbolic strings.
  */
-function formatReply(value: number, normalised: string): string {
-  const rounded = formatNumber(value);
-  // Show the normalised expression in a code fence so the user can see
-  // exactly what got evaluated (vs the Unicode'd version they typed).
-  // Keep the fence short; very long expressions get truncated.
-  const exprShown = normalised.length > 300 ? normalised.slice(0, 300) + "…" : normalised;
-  return `**Answer: ${rounded}**\n\n` +
+function formatReply(
+  value: number | string,
+  kind: MathSkillResult["kind"],
+  display: string,
+  normalised: string,
+): string {
+  let formattedAnswer: string;
+
+  if (typeof value === "number") {
+    formattedAnswer = formatNumber(value);
+  } else if (kind === "matrix") {
+    // Render matrices in a code fence for readability.
+    return `**Answer:**\n\n\`\`\`\n${display}\n\`\`\`\n\n_(from: \`${truncate(normalised, 240)}\`)_`;
+  } else {
+    // Fraction, complex, unit, bignumber, symbolic — already a string.
+    formattedAnswer = display;
+  }
+
+  const exprShown = truncate(normalised, 300);
+  return `**Answer: ${formattedAnswer}**\n\n` +
     `\`${exprShown}\``;
+}
+
+function truncate(s: string, n: number): string {
+  return s.length > n ? s.slice(0, n) + "…" : s;
 }
 
 function formatNumber(n: number): string {

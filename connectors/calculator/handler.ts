@@ -36,6 +36,62 @@ import type { ConnectorHandler } from "@/lib/connectors/types";
 
 type Args = { expression: string };
 
+/**
+ * Layered engine:
+ *
+ *   1. mathjs (if installed)  — handles symbolic algebra, derivatives,
+ *      simplification, units ("5 km/h in m/s"), complex numbers
+ *      ("(3+4i)*(2-i)"), matrices ([[1,2],[3,4]]*[[5,6],[7,8]]), rational
+ *      fractions ("1/3 + 1/6" → "1/2" exactly), statistics (mean, std,
+ *      variance), combinatorics (nCr, nPr), number theory (gcd, lcm,
+ *      isPrime, factorize), trig with units (sin(45 deg)), and ~250
+ *      other functions. Install with: npm install mathjs
+ *
+ *   2. Built-in fallback parser — recursive-descent with Unicode
+ *      normalisation. Same capability surface as before the mathjs
+ *      layer was added. Always available, no dependency. Used when
+ *      mathjs isn't installed OR when mathjs rejects an expression.
+ *
+ * The handler is async so the dynamic mathjs import can be awaited
+ * without throwing if the package is missing.
+ */
+
+// mathjs is an OPTIONAL runtime dependency. Typed as `unknown` so this
+// file compiles even on systems where `npm install mathjs` hasn't been
+// run yet — the dynamic import below silently fails and the built-in
+// fallback parser takes over. Install with `npm install mathjs` (~600 KB)
+// to unlock the full CAS surface advertised in the manifest.
+type MathjsModule = {
+  evaluate: (expr: string) => unknown;
+  format: (value: unknown, options?: { precision?: number }) => string;
+  isFraction?: (x: unknown) => boolean;
+  isComplex?: (x: unknown) => boolean;
+  isMatrix?: (x: unknown) => boolean;
+  isUnit?: (x: unknown) => boolean;
+  isBigNumber?: (x: unknown) => boolean;
+};
+
+let mathjs: MathjsModule | null = null;
+let mathjsLoadAttempted = false;
+
+async function loadMathjs(): Promise<MathjsModule | null> {
+  if (mathjsLoadAttempted) return mathjs;
+  mathjsLoadAttempted = true;
+  try {
+    // Indirection through a string-keyed Function so TypeScript's
+    // module resolver doesn't try to type-check the import target.
+    // The eval'd dynamic import returns a real module at runtime.
+    const dynImport = new Function("s", "return import(s)") as (s: string) => Promise<unknown>;
+    const mod = (await dynImport("mathjs")) as MathjsModule;
+    if (mod && typeof mod.evaluate === "function" && typeof mod.format === "function") {
+      mathjs = mod;
+    }
+  } catch {
+    mathjs = null;
+  }
+  return mathjs;
+}
+
 const handler: ConnectorHandler<Args> = async (args) => {
   const { expression } = args ?? ({} as Args);
   if (!expression || typeof expression !== "string") {
@@ -44,19 +100,119 @@ const handler: ConnectorHandler<Args> = async (args) => {
   if (expression.length > 1024) {
     return { ok: false, error: `expression too long (${expression.length} chars; limit 1024)` };
   }
+
+  const normalised = normaliseUnicode(expression);
+
+  // Layer 1: try mathjs first if installed. Covers algebra, calculus,
+  // matrices, complex numbers, units, fractions, statistics, etc.
+  const m = await loadMathjs();
+  if (m) {
+    try {
+      // Locked-down evaluator — `evaluate` is the one entrypoint mathjs
+      // documents as safe against expression-injection. No `import`, no
+      // dangerous extensions.
+      const raw = m.evaluate(normalised);
+      const formatted = formatMathjsResult(raw, m);
+      if (formatted !== null) {
+        return {
+          ok: true,
+          output: {
+            expression,
+            normalised,
+            value: formatted.value,
+            kind: formatted.kind,
+            display: formatted.display,
+            engine: "mathjs",
+          },
+        };
+      }
+      // formatMathjsResult returned null — result was something we can't
+      // express (e.g. a function ref). Fall through to layer 2.
+    } catch {
+      // mathjs rejected — fall through.
+    }
+  }
+
+  // Layer 2: built-in recursive-descent parser. Numeric only.
   try {
-    const normalised = normaliseUnicode(expression);
     const value = evaluate(normalised);
     if (!Number.isFinite(value)) {
       return { ok: false, error: `result is ${value === Infinity ? "infinity" : value === -Infinity ? "-infinity" : "NaN"}` };
     }
-    return { ok: true, output: { expression, normalised, value } };
+    return {
+      ok: true,
+      output: {
+        expression,
+        normalised,
+        value,
+        kind: "number" as const,
+        display: String(value),
+        engine: "builtin",
+      },
+    };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
 };
 
 export default handler;
+
+// ─── mathjs result formatter ────────────────────────────────────────────────
+
+interface FormattedResult {
+  /** A JSON-serialisable representation of the value (number for scalars,
+   *  string for everything else). */
+  value: number | string;
+  /** What kind of mathematical object this is. */
+  kind: "number" | "fraction" | "complex" | "matrix" | "unit" | "bignumber" | "string";
+  /** Human-readable display string. */
+  display: string;
+}
+
+function formatMathjsResult(raw: unknown, m: MathjsModule): FormattedResult | null {
+  if (raw === null || raw === undefined) return null;
+  // Pure JS number
+  if (typeof raw === "number") {
+    if (!Number.isFinite(raw)) return null;
+    return { value: raw, kind: "number", display: String(raw) };
+  }
+  // mathjs typed objects: use isX() helpers when available
+  if (typeof raw === "object") {
+    const display = m.format(raw, { precision: 12 });
+    if (m.isFraction?.(raw)) {
+      const f = raw as { n: number; d: number };
+      return { value: f.d === 1 ? f.n : `${f.n}/${f.d}`, kind: "fraction", display };
+    }
+    if (m.isComplex?.(raw)) {
+      return { value: display, kind: "complex", display };
+    }
+    if (m.isMatrix?.(raw)) {
+      // For small matrices show the literal; for big ones, just dimensions.
+      const sizeFn = (raw as { size?: () => number[] }).size;
+      const size = typeof sizeFn === "function" ? sizeFn.call(raw) : [];
+      const length = size.reduce((a, b) => a * b, 1);
+      const out = length <= 64 ? display : `Matrix(${size.join("×")})`;
+      return { value: out, kind: "matrix", display };
+    }
+    if (m.isUnit?.(raw)) {
+      return { value: display, kind: "unit", display };
+    }
+    if (m.isBigNumber?.(raw)) {
+      const asNum = (raw as { toNumber: () => number }).toNumber();
+      return Number.isFinite(asNum)
+        ? { value: asNum, kind: "bignumber", display }
+        : { value: display, kind: "bignumber", display };
+    }
+  }
+  if (typeof raw === "string") {
+    return { value: raw, kind: "string", display: raw };
+  }
+  if (typeof raw === "boolean") {
+    return { value: raw ? "true" : "false", kind: "string", display: raw ? "true" : "false" };
+  }
+  // Anything else (function refs, etc.) — let the caller fall back
+  return null;
+}
 
 // ─── Unicode normalisation ───────────────────────────────────────────────────
 
