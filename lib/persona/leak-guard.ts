@@ -101,9 +101,13 @@ export function stripLatexToPlainMarkdown(text: string): string {
   // 1. \boxed{X} → **X** (final-answer convention)
   out = out.replace(/\\boxed\s*\{([^{}]*)\}/g, "**$1**");
 
-  // 2. \frac{a}{b} → (a / b). Two-pass to handle nested fractions.
-  for (let i = 0; i < 4; i++) {
+  // 2. \frac{a}{b} → (a / b). Multi-pass to unwind nested fractions/sqrts.
+  //    Run sqrt FIRST so nested \frac{X}{Y \sqrt{Z}} unwinds correctly —
+  //    sqrt strips the inner braces, then frac's [^{}]* matcher works.
+  for (let i = 0; i < 8; i++) {
     const before = out;
+    // sqrt first so inner braces collapse
+    out = out.replace(/\\sqrt\s*\{([^{}]*)\}/g, "sqrt($1)");
     out = out.replace(/\\(?:d?frac|tfrac)\s*\{([^{}]*)\}\s*\{([^{}]*)\}/g, "($1 / $2)");
     if (out === before) break;
   }
@@ -187,7 +191,19 @@ export function stripLatexToPlainMarkdown(text: string): string {
   //     Common in cloud-LLM math output even when other LaTeX is absent.
   out = out.replace(/(\^|_)\{([^{}]+)\}/g, "$1$2");
 
-  // 13. Cleanup: collapse runs of whitespace introduced by stripping.
+  // 13. Stray `{N}` immediately following `sqrt(X)` is the canonical fingerprint
+  //     of a partially-stripped `\frac{N}{X}\sqrt{...}` pattern — the LaTeX
+  //     output `\frac{13}{9}\sqrt{65}` had `\frac` mismatched on some path
+  //     and left `{9}` orphaned right after `sqrt(65)`. Rewrite specifically
+  //     this shape as ` / 9` since that's what it semantically was. Scoped
+  //     narrowly so we don't mangle unrelated code blocks like `obj.x{5}`.
+  out = out.replace(/\)\s*\{(\d+(?:\.\d+)?)\}/g, ") / $1");
+
+  // 14. \over infix (low-level TeX): `a \over b` → `(a / b)`. Bounded so
+  //     we don't gobble across newlines or whole sentences.
+  out = out.replace(/([^\s{}]+(?:\s+[^\s{}]+){0,3})\s*\\over\s+([^\s{}]+(?:\s+[^\s{}]+){0,3})/g, "($1 / $2)");
+
+  // 15. Cleanup: collapse runs of whitespace introduced by stripping.
   out = out
     .replace(/[ \t]+\n/g, "\n")
     .replace(/\n{3,}/g, "\n\n")

@@ -409,6 +409,16 @@ export async function* orchestrate(opts: {
   let aggregatedText = "";
   const citations: Citation[] = [];
   let conversation: Message[] = history;
+  // Track the most recent successful tool result so we can fall back to
+  // showing it directly if the synthesis hop fails to produce any text.
+  // Without this, a calculator + dead-synthesis combo leaves the user
+  // with "Every backend errored out" — even though we DID compute the
+  // answer, we just couldn't get the model to write the prose around it.
+  let lastSuccessfulToolResult: {
+    name: string;
+    output: unknown;
+    args: unknown;
+  } | null = null;
 
   for (let hop = 0; hop < MAX_TOOL_HOPS; hop++) {
     yield { type: "stage", stage: hop === 0 ? "thinking" : "synthesising", detail: hop > 0 ? `hop ${hop}` : undefined };
@@ -489,6 +499,12 @@ export async function* orchestrate(opts: {
         }
       }
 
+      // Cache the latest successful tool result so the post-loop fallback
+      // can render it if synthesis fails entirely.
+      if (result.ok) {
+        lastSuccessfulToolResult = { name: tc.name, output: result.output, args: tc.args };
+      }
+
       const rawContent = result.ok
         ? typeof result.output === "string" ? result.output : JSON.stringify(result.output)
         : `Error: ${result.error}`;
@@ -508,6 +524,25 @@ export async function* orchestrate(opts: {
         ...conversation,
         { id: nid(), role: "tool", content, toolCallId: tc.id, createdAt: isoNow() },
       ];
+    }
+  }
+
+  // 7a. SYNTHESIS-FAILURE FALLBACK — if the hop loop finished but the model
+  //     never produced any visible text AND a tool succeeded, the synthesis
+  //     hop failed (chain-exhausted, timeout, etc.). Don't leave the user
+  //     with "Every backend errored out" when we DO have a real answer —
+  //     just render the tool result directly with a brief framing.
+  //
+  //     Common case: calculator returns a number, all 7 providers fail
+  //     the synthesis hop for some reason, the user used to see the
+  //     graceful "Something errored out" message — but the actual answer
+  //     was sitting in the tool result the whole time. Now we surface it.
+  if (!aggregatedText.trim() && lastSuccessfulToolResult) {
+    const fallback = formatToolResultFallback(lastSuccessfulToolResult);
+    if (fallback) {
+      log.info(`synthesis-failure fallback fired (tool=${lastSuccessfulToolResult.name})`);
+      aggregatedText = fallback;
+      yield { type: "text", text: fallback };
     }
   }
 
@@ -832,4 +867,51 @@ function formatMemoryBlock(
     }
   }
   return lines.join("\n");
+}
+
+/**
+ * Render a tool's success output as a plain-text fallback for the user
+ * when the synthesis hop fails entirely. Hand-tuned per-connector so the
+ * user gets a useful answer instead of "everything errored out".
+ *
+ * Generic case: stringify the output as JSON in a code fence. Better than
+ * nothing, gives operators something to debug from.
+ *
+ * Returns null if the tool result isn't worth surfacing on its own
+ * (e.g. an empty array from web-search).
+ */
+function formatToolResultFallback(result: {
+  name: string;
+  output: unknown;
+  args: unknown;
+}): string | null {
+  // Calculator — the numeric value is the answer. Show it plainly.
+  if (result.name === "calculator" && typeof result.output === "object" && result.output !== null) {
+    const out = result.output as { value?: number; expression?: string; normalised?: string };
+    if (typeof out.value === "number" && Number.isFinite(out.value)) {
+      const expr = (out.normalised ?? out.expression ?? "").trim();
+      const exprLine = expr ? `\n\n_(evaluated: \`${expr.slice(0, 240)}${expr.length > 240 ? "…" : ""}\`)_` : "";
+      return `**Answer: ${out.value}**${exprLine}\n\n_(I had trouble writing the full explanation — the calculation itself succeeded. Ask if you want me to walk through the steps.)_`;
+    }
+  }
+
+  // datetime — `output.iso` or `output.formatted` is the answer
+  if (result.name === "datetime" && typeof result.output === "object" && result.output !== null) {
+    const out = result.output as { iso?: string; formatted?: string };
+    const value = out.formatted ?? out.iso;
+    if (value) return `**${value}**`;
+  }
+
+  // Generic: stringify and present in a code fence. Limit to ~600 chars
+  // so we don't dump a giant search-result blob on the user.
+  try {
+    const text = typeof result.output === "string"
+      ? result.output
+      : JSON.stringify(result.output, null, 2);
+    if (!text || text === "null" || text === "{}" || text === "[]") return null;
+    const trimmed = text.length > 600 ? text.slice(0, 600) + "\n…[truncated]" : text;
+    return `Tool \`${result.name}\` returned:\n\n\`\`\`\n${trimmed}\n\`\`\`\n\n_(The synthesis step couldn't complete — surfacing the raw result so you have something to work with.)_`;
+  } catch {
+    return null;
+  }
 }

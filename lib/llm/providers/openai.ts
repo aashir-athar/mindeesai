@@ -149,17 +149,30 @@ export async function* streamOpenAICompatible(
   // a chunk. That's the exact failure mode behind the "Composing Answer…
   // stuck forever" bug: model returns 200 OK on a synthesis hop, then
   // never streams a token (some safety classifier triggered, model
-  // overloaded, etc.). Race each read against a 25s timer; on stall, throw
-  // a typed ProviderError so the router walks to the next fallback model.
-  const CHUNK_STALL_MS = 25_000;
+  // overloaded, etc.). Race each read against the appropriate timer; on
+  // stall, throw a typed ProviderError so the router walks to the next
+  // fallback model.
+  //
+  // First-chunk window is more generous (45s) because heavy synthesis on
+  // a 70B model with a long prompt can legitimately take 30-40s to emit
+  // the first token even when nothing is wrong. Subsequent chunks should
+  // arrive fast (sub-second between tokens once generation starts), so a
+  // tight 25s gap there reliably catches actual stalls.
+  const FIRST_CHUNK_STALL_MS = 45_000;
+  const NEXT_CHUNK_STALL_MS = 25_000;
+  let receivedAnyChunk = false;
 
   while (true) {
+    const stallMs = receivedAnyChunk ? NEXT_CHUNK_STALL_MS : FIRST_CHUNK_STALL_MS;
     let readResult: ReadableStreamReadResult<Uint8Array>;
     try {
       readResult = await Promise.race([
         reader.read(),
         new Promise<never>((_, rej) =>
-          setTimeout(() => rej(new Error("stream stalled — no chunk in 25s")), CHUNK_STALL_MS),
+          setTimeout(
+            () => rej(new Error(`stream stalled — no chunk in ${stallMs / 1000}s${receivedAnyChunk ? "" : " (first-chunk wait)"}`)),
+            stallMs,
+          ),
         ),
       ]);
     } catch (e) {
