@@ -42,9 +42,9 @@ on:
         type: choice
         options: [nano, small]
       steps:
-        description: 'Training steps per run. Empirically GH Actions CPU does ~22.5 sec/step on the small variant, so 700 steps ≈ 4.5h training. Daily × 700 ≈ 21k steps/month. (For real capability gains, use your local GPU — 50-100× faster.)'
+        description: 'Training steps per run. Empirically GH Actions CPU does ~22.5 sec/step on the small variant, so 900 steps would need ~5h 37min — the 290m Python timeout will naturally cap actual execution at ~770 steps within the 5h budget, but a faster-than-expected runner can use the full 900. Daily × ~770 ≈ 23k steps/month.'
         required: false
-        default: '700'
+        default: '900'
       batch:
         description: 'Batch size'
         required: false
@@ -78,8 +78,11 @@ on:
     #
     # EMPIRICAL THROUGHPUT (measured from a real run, not theoretical):
     #   small variant (40.8M params, ctx=2048, batch=4) = ~22.5 sec/step
-    #   In 4.5h (270 min) of training: ~700 steps per run.
-    #   Daily × 700 = 21,000 steps/month of cumulative training.
+    #   In 4h 50min (290 min Python timeout) of training: ~770 steps.
+    #   --steps default is 900 to allow faster-than-expected runners to
+    #   push beyond ~770. Slower runs are capped by the timeout, never
+    #   exceed the 5h training budget.
+    #   Daily × ~770-900 = 23k-27k steps/month of cumulative training.
     #
     # PUBLIC repos have UNLIMITED Actions minutes on free tier — so 5h
     # daily runs (~150h/month) cost nothing. Private repos would hit the
@@ -285,7 +288,7 @@ jobs:
           MIND_VARIANT: ${{ github.event.inputs.variant || 'small' }}
         run: |
           VARIANT="${{ github.event.inputs.variant || 'small' }}"
-          STEPS="${{ github.event.inputs.steps || '700' }}"
+          STEPS="${{ github.event.inputs.steps || '900' }}"
           BATCH="${{ github.event.inputs.batch || '4' }}"
           RESUME_FLAG="${{ github.event.inputs.resume || 'true' }}"
           mkdir -p checkpoints data
