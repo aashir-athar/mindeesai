@@ -1,0 +1,36 @@
+{
+  "_doc": [
+    "Preference/DPO-only mix derived from mix-broadbrain(1).json.",
+    "Do not feed this into ordinary pretraining/SFT unless your loader explicitly extracts chosen responses and ignores rejected responses.",
+    "Use with a DPO/reward/preference training script."
+  ],
+  "sources": [
+    {
+      "name": "human-like-dpo",
+      "dataset": "HumanLLMs/Human-Like-DPO-Dataset",
+      "split": "train",
+      "kind": "preference",
+      "max_tokens": 1000000,
+      "weight": 1.5,
+      "note": "Preference data for more human-like, fluent, engaging conversational responses. Best used for DPO stage."
+    },
+    {
+      "name": "ultrafeedback-binarized",
+      "dataset": "HuggingFaceH4/ultrafeedback_binarized",
+      "split": "train_prefs",
+      "kind": "preference",
+      "max_tokens": 2000000,
+      "weight": 1.2,
+      "note": "Preference dataset for DPO/reward training. Improves helpfulness, response quality, and instruction alignment."
+    },
+    {
+      "name": "ultrafeedback",
+      "dataset": "openbmb/UltraFeedback",
+      "split": "train",
+      "kind": "preference",
+      "max_tokens": 2000000,
+      "weight": 1.0,
+      "note": "Fine-grained preference data. Useful for reward modeling, rejection sampling, or DPO-style alignment."
+    }
+  ]
+}

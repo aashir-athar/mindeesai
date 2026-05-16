@@ -1,0 +1,54 @@
+{
+  "_doc": [
+    "Datasets parked/removed from active configs after cleanup.",
+    "They were removed because of redundancy, schema/loader concerns, clinical overfit risk, or license uncertainty.",
+    "Nothing here was deleted from the original file; this is just a record."
+  ],
+  "sources": [
+    {
+      "name": "mental-health-counseling",
+      "dataset": "Amod/mental_health_counseling_conversations",
+      "split": "train",
+      "kind": "dialogue",
+      "max_tokens": 800000,
+      "weight": 0.5,
+      "note": "Counseling Q&A data for empathy and sensitive-response behavior. Low weight to avoid making the model sound overly clinical."
+    },
+    {
+      "name": "smoltalk",
+      "dataset": "HuggingFaceTB/smoltalk",
+      "split": "train",
+      "kind": "dialogue",
+      "max_tokens": 5000000,
+      "weight": 1.5,
+      "note": "Synthetic SFT dataset used for SmolLM2-Instruct. Broad instruction-following and conversational behavior."
+    },
+    {
+      "name": "tulu3-sft-mixture",
+      "dataset": "allenai/tulu-3-sft-mixture",
+      "split": "train",
+      "kind": "dialogue",
+      "max_tokens": 2000000,
+      "weight": 0.8,
+      "note": "Large modern SFT mixture. Check licenses carefully; some subsets may be non-commercial."
+    },
+    {
+      "name": "oasst1",
+      "dataset": "OpenAssistant/oasst1",
+      "split": "train",
+      "kind": "dialogue",
+      "max_tokens": 1000000,
+      "weight": 0.5,
+      "note": "OpenAssistant Conversations Dataset — fully human-written. KNOWN QUIRK: oasst1 is stored as a flat message tree (each row is a single node with parent_id), so load_dialogue_hf can't reassemble proper multi-turn conversations and falls through to flat-token ingestion ('0 conversations → 2M tokens' in the log). The text is still high-quality human writing so we keep it at low weight as a raw-text quality anchor — not as a structured chat signal. If/when load_dialogue_hf gets an oasst1-tree-reassembly path, restore weight to 2.0."
+    },
+    {
+      "name": "code-alpaca",
+      "dataset": "sahil2801/CodeAlpaca-20k",
+      "split": "train",
+      "kind": "dialogue",
+      "max_tokens": 1000000,
+      "weight": 1.4,
+      "note": "Code instructions in alpaca format."
+    }
+  ]
+}

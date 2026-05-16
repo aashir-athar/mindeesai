@@ -1,0 +1,82 @@
+{
+  "_doc": [
+    "Raw code mix — bigcode/the-stack-smol entries, ALL CURRENTLY GATED.",
+    "",
+    "BigCode flipped the-stack-smol to gated access in 2024. Loading any of",
+    "these entries without prior access approval raises a GatedRepoError, NOT",
+    "a silent skip. The active SFT recipe (mix-broadbrain.json v4.1) has",
+    "replaced these with public alternatives:",
+    "  - the-stack-python   → codeparrot/codeparrot-clean",
+    "  - the-stack-solidity → andstor/smart_contracts",
+    "  - the-stack-typescript / javascript / html / css: dropped (no clean",
+    "    public raw alternatives; coverage shifted to synthetic SFT mixes)",
+    "",
+    "This file is preserved as a 'restore-if-gating-cleared' recipe. To",
+    "re-enable: request access at https://huggingface.co/datasets/bigcode/the-stack-smol",
+    "wait for approval (typically 1–7 days), set HF_TOKEN with read scope",
+    "across all training environments, then merge entries back into",
+    "mix-broadbrain.json sources[]."
+  ],
+  "sources": [
+    {
+      "name": "the-stack-python",
+      "dataset": "bigcode/the-stack-smol",
+      "config": "data/python",
+      "split": "train",
+      "kind": "raw",
+      "max_tokens": 5000000,
+      "weight": 1.3,
+      "note": "Real Python from public GitHub."
+    },
+    {
+      "name": "the-stack-typescript",
+      "dataset": "bigcode/the-stack-smol",
+      "config": "data/typescript",
+      "split": "train",
+      "kind": "raw",
+      "max_tokens": 3000000,
+      "weight": 1.0,
+      "note": "TypeScript — Next.js / React / web stack."
+    },
+    {
+      "name": "the-stack-solidity",
+      "dataset": "bigcode/the-stack-smol",
+      "config": "data/solidity",
+      "split": "train",
+      "kind": "raw",
+      "max_tokens": 1500000,
+      "weight": 0.8,
+      "note": "Solidity smart contracts. Web3 / blockchain coverage."
+    },
+    {
+      "name": "the-stack-html",
+      "dataset": "bigcode/the-stack-smol",
+      "config": "data/html",
+      "split": "train",
+      "kind": "raw",
+      "max_tokens": 2000000,
+      "weight": 0.8,
+      "note": "HTML markup. Visual-structure vocabulary for UI tasks."
+    },
+    {
+      "name": "the-stack-css",
+      "dataset": "bigcode/the-stack-smol",
+      "config": "data/css",
+      "split": "train",
+      "kind": "raw",
+      "max_tokens": 1500000,
+      "weight": 0.8,
+      "note": "CSS / SCSS. Design + layout + Tailwind-adjacent class vocabulary for UI/UX."
+    },
+    {
+      "name": "the-stack-javascript",
+      "dataset": "bigcode/the-stack-smol",
+      "config": "data/javascript",
+      "split": "train",
+      "kind": "raw",
+      "max_tokens": 3000000,
+      "weight": 1.0,
+      "note": "JavaScript from public GitHub — JSX patterns, React Native components, Node.js. Adds RN production-code vocabulary."
+    }
+  ]
+}

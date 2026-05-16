@@ -1,0 +1,18 @@
+{
+  "_doc": [
+    "Agentic-code/tool-use mix derived from mix-broadbrain(1).json.",
+    "Use only with an agentic formatter/loader that preserves actions, observations, tool calls, shell output, file edits, and test loops.",
+    "This file is not meant for plain chat/SFT ingestion."
+  ],
+  "sources": [
+    {
+      "name": "nemotron-agentic-swe",
+      "dataset": "nvidia/Nemotron-RL-Agentic-SWE-Pivot-v1",
+      "split": "train",
+      "kind": "agentic",
+      "max_tokens": 2000000,
+      "weight": 1.0,
+      "note": "Agentic SWE/tool-use data. Useful for terminal-use, function-calling, and multi-step coding workflows."
+    }
+  ]
+}
