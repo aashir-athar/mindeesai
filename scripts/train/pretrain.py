@@ -916,6 +916,12 @@ def main():
     ap.add_argument("--dialogue-split", default="train")
     ap.add_argument("--dialogue-weight", type=float, default=3.0)
     ap.add_argument("--dialogue-max-tokens", type=int, default=1_500_000)
+    # Multi-dataset recipe — adds N more sources from a JSON config on top of
+    # the --corpus / --distill-corpus / --hf-dataset / --dialogue-dataset
+    # flags above. Backward compatible: omit this flag and behaviour is
+    # identical to before. See scripts/data/mix-broadbrain.json for the
+    # canonical example covering code + math + reasoning + chat.
+    ap.add_argument("--mix-config", default=None, help="Path to a JSON file describing additional training data sources. See scripts/data/mix-broadbrain.json.")
     args = ap.parse_args()
 
     torch.manual_seed(args.seed)
@@ -984,6 +990,70 @@ def main():
                 args.dialogue_weight,
                 f"dialogue:{args.dialogue_dataset}({len(dlg_ids):,}tok,mask={dlg_mask_dev is not None})",
             ))
+
+    # Multi-dataset recipe — pull in N additional HF datasets described by the
+    # JSON config. Each entry can be `kind: "raw"` (passes through
+    # load_hf_streaming, raw text concatenation) or `kind: "dialogue"` (passes
+    # through load_dialogue_hf, chat-template formatting with optional
+    # completion-only loss masking).
+    #
+    # Sources that fail to load (network error, gated dataset, schema mismatch)
+    # are logged and skipped — the training run continues on whatever DID load.
+    # That keeps a single bad dataset from killing an overnight run.
+    if args.mix_config:
+        import json as _json
+        mix_path = Path(args.mix_config)
+        if not mix_path.exists():
+            raise SystemExit(f"--mix-config file not found: {mix_path}")
+        try:
+            recipe = _json.loads(mix_path.read_text(encoding="utf-8"))
+        except _json.JSONDecodeError as e:
+            raise SystemExit(f"--mix-config JSON parse error in {mix_path}: {e}")
+        entries = recipe.get("sources", []) if isinstance(recipe, dict) else []
+        print(f"\n--mix-config: {mix_path.name} — adding {len(entries)} dataset(s)", file=sys.stderr)
+        for entry in entries:
+            if not isinstance(entry, dict):
+                print(f"  skip: not an object: {entry!r}", file=sys.stderr)
+                continue
+            name = str(entry.get("name") or entry.get("dataset") or "unnamed")
+            ds_id = entry.get("dataset")
+            if not ds_id:
+                print(f"  skip {name}: missing 'dataset' field", file=sys.stderr)
+                continue
+            kind = str(entry.get("kind", "raw")).lower()
+            split = str(entry.get("split", "train"))
+            cfg_name = entry.get("config")
+            max_toks = int(entry.get("max_tokens", 2_000_000))
+            weight = float(entry.get("weight", 1.0))
+            if weight <= 0:
+                print(f"  skip {name}: weight={weight} (zero or negative)", file=sys.stderr)
+                continue
+            print(f"  + {name} [{kind}] {ds_id} (split={split}, max={max_toks:,}tok, weight={weight})", file=sys.stderr)
+            if kind == "raw":
+                ids = load_hf_streaming(ds_id, cfg_name, split, args.tokenizer, max_tokens=max_toks)
+                if ids.numel() > 2 * cfg.context_length + 4:
+                    ids = ids.to(device)
+                    sources.append((
+                        StreamingTextDataset(ids, cfg.context_length),
+                        weight,
+                        f"mix:{name}({len(ids):,}tok)",
+                    ))
+            elif kind == "dialogue":
+                ids, mask = load_dialogue_hf(
+                    ds_id, split, args.tokenizer,
+                    max_tokens=max_toks,
+                    completion_only=bool(args.completion_only_loss),
+                )
+                if ids.numel() > 2 * cfg.context_length + 4:
+                    ids = ids.to(device)
+                    mask_dev = mask.to(device) if mask is not None else None
+                    sources.append((
+                        StreamingTextDataset(ids, cfg.context_length, mask_dev),
+                        weight,
+                        f"mix:{name}({len(ids):,}tok,mask={mask_dev is not None})",
+                    ))
+            else:
+                print(f"  skip {name}: unknown kind={kind!r} (use 'raw' or 'dialogue')", file=sys.stderr)
 
     train_ds = MixedSampler(sources)
     print(f"val tokens: {len(val_tokens):,}")
