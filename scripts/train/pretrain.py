@@ -92,7 +92,7 @@ VARIANTS: dict[str, Config] = {
     "moe-small": Config("moe-small", 32000, 2048, 512,  8,  8, 4, 1024, use_moe=True, num_experts=8,  experts_per_token=2, use_mla=True, mla_latent_dim=128, use_mtp=True),
     "moe-base":  Config("moe-base",  50000, 4096, 1024, 12, 16, 8, 1408, rope_base=500000.0, use_moe=True, num_experts=16, experts_per_token=2, use_mla=True, mla_latent_dim=256, use_mtp=True),
     # ─── Tuned for a single 12GB consumer GPU (RTX 4070/5070/4080-class) ──
-    # ~280M params, 16 layers × d_model 1280, bf16 + grad-ckpt → fits 12GB
+    # ~280M params, 16 layers × d_model 1280, fp16 + grad-ckpt → fits 12GB
     # at batch=8 with seq=4096. The single best quality you can train at
     # home in one overnight run on consumer hardware.
     "home-max": Config(
@@ -1110,7 +1110,13 @@ def main():
         loss_sum = 0.0
         for _ in range(args.grad_accum):
             x, y, loss_mask = train_ds.sample(args.batch, device)
-            with autocast(device_type=device, enabled=args.amp and device == "cuda", dtype=torch.bfloat16 if device == "cuda" else torch.float32):
+            # AMP dtype is float16 (works on Pascal+; the GradScaler above
+            # handles fp16's gradient-underflow concern). bf16 would also work
+            # on Ampere/Ada/Blackwell and skip the scaling — switch back to
+            # torch.bfloat16 if you're confident the hardware supports it and
+            # want slightly cleaner gradient stats. fp16 is the safer default
+            # because it works everywhere.
+            with autocast(device_type=device, enabled=args.amp and device == "cuda", dtype=torch.float16 if device == "cuda" else torch.float32):
                 main_logits, mtp_logits, aux = model(x)
                 if loss_mask is None:
                     ce = F.cross_entropy(main_logits.view(-1, cfg.vocab_size), y.view(-1))
