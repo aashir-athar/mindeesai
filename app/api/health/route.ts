@@ -17,10 +17,23 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  await ensureLanceDBReady().catch(() => {});
+  // Race the R2/Blob hydrate against a 4-second cap. /api/health has a 10s
+  // maxDuration ceiling on Vercel Hobby; a cold function instance hydrating
+  // dozens of files from R2 can easily blow past 7s, which makes the
+  // entire endpoint 504 with FUNCTION_INVOCATION_TIMEOUT.
+  //
+  // What we want instead: best-effort hydrate, but if it's slow, just
+  // report whatever's currently in /tmp. The diagnostics will still show
+  // the persistence mode and connector count, and operators can read the
+  // partial state to figure out what's wrong.
+  await Promise.race([
+    ensureLanceDBReady().catch(() => {}),
+    new Promise<void>((resolve) => setTimeout(resolve, 4000)),
+  ]);
+
   const [lance, reg] = await Promise.all([
-    lancedbHealth(),
-    getRegistry(),
+    lancedbHealth().catch(() => ({ ok: false, tables: 0 })),
+    getRegistry().catch(() => new Map<string, unknown>()),
   ]);
 
   // Improvement log tail — proves the cron has been ticking

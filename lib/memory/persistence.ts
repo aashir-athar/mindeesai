@@ -268,6 +268,15 @@ export async function persistPersonaQuick(): Promise<void> {
     // serverless instance read an empty thread file ('forgot the topic'
     // bug). Must be quick-flushed for intra-session continuity.
     path.join(DATA_DIR, "conversations"),
+    // Thread metadata (title, lastActivity, turn count, preview) lives
+    // here; touched by the orchestrator on every turn via touchMeta().
+    // CRITICAL bug if this is missing: /api/threads listThreads() reads
+    // an empty /tmp dir on every cold start and reports "no threads"
+    // even though 20+ conversations actually exist.
+    path.join(DATA_DIR, "threads"),
+    // Rolling per-thread summaries — written every 6 turns past turn 12.
+    // Same cold-start vanishing problem if not in this list.
+    path.join(DATA_DIR, "thread-summaries"),
     path.join(DATA_DIR, "user-models"),
     path.join(DATA_DIR, "relationships"),
     path.join(DATA_DIR, "theory-of-mind"),
