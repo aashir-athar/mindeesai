@@ -12,15 +12,23 @@
  *     emotion classifier             ~80 MB  (Q8)
  *     BGE embedder                   ~40 MB  (Q8)
  *
- *   Added in this batch:
+ *   Added in earlier batch:
  *     ms-marco reranker              ~30 MB  (Q8)
  *     twitter-roberta sentiment      ~60 MB  (Q8)
  *     bert-base-NER                 ~110 MB  (Q8)
  *     toxic-bert                    ~110 MB  (Q8)
  *
- *   Subtotal worst case:           ~430 MB  (all loaded simultaneously)
+ *   Added in this batch (Tier 1 — safety + routing + summarisation):
+ *     PII detector (deberta-base)    ~75 MB  (Q8)
+ *     zero-shot NLI (deberta-xsmall) ~50 MB  (Q8)
+ *     summariser (distilbart-cnn-6-6)~150 MB (Q8)
+ *
+ *   Subtotal worst case:           ~705 MB  (all loaded simultaneously)
  *   Plus baseline runtime:         ~400 MB
- *   Headroom under Hobby limit:    ~200 MB
+ *   Headroom under Hobby limit:    -80 MB (TIGHT — but models are lazy-loaded
+ *                                          and rarely all live at once. The
+ *                                          PII + summariser paths fire on
+ *                                          different timescales.)
  *
  * Every model is loaded with `dtype: "q8"` for the smallest viable footprint.
  * First-call latency: ~5-15s per model on cold function. Steady-state: ~10-100ms.
@@ -99,6 +107,32 @@ export const MODELS = {
     model: "Xenova/toxic-bert",
     dtype: "q8" as const,
   },
+  /** PII / personal-info token classifier. Tags spans like EMAIL, PHONE,
+   *  CREDITCARD, ADDRESS, SOCIALNUM, etc. Used to redact distill-corpus
+   *  rows BEFORE they hit a public HF repo or get pushed to R2. */
+  pii: {
+    task: "token-classification",
+    model: "Xenova/piiranha-v1-detect-personal-information",
+    dtype: "q8" as const,
+  },
+  /** Zero-shot text classifier — supply any candidate labels at call time.
+   *  Used by the orchestrator to route messages by topic ("code", "math",
+   *  "personal", "creative", "factual") and pick the right system prompt
+   *  + connector subset without training a separate classifier per axis. */
+  zeroShot: {
+    task: "zero-shot-classification",
+    model: "Xenova/nli-deberta-v3-xsmall",
+    dtype: "q8" as const,
+  },
+  /** Abstractive summariser (DistilBART trained on CNN/DM). Replaces the
+   *  LLM call in lib/threads/summary.ts so long-thread rolling summaries
+   *  are free of cloud quota cost. ~150 MB Q8; only loaded when a thread
+   *  actually crosses the summarisation interval. */
+  summarizer: {
+    task: "summarization",
+    model: "Xenova/distilbart-cnn-6-6",
+    dtype: "q8" as const,
+  },
 } satisfies Record<string, ModelSpec>;
 
 /** Convenience helpers — each returns null on failure, never throws. */
@@ -113,4 +147,13 @@ export async function nerPipeline() {
 }
 export async function toxicityPipeline() {
   return getPipeline(MODELS.toxicity);
+}
+export async function piiPipeline() {
+  return getPipeline(MODELS.pii);
+}
+export async function zeroShotPipeline() {
+  return getPipeline(MODELS.zeroShot);
+}
+export async function summarizerPipeline() {
+  return getPipeline(MODELS.summarizer);
 }

@@ -28,6 +28,7 @@ import { appendFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { dataPath } from "@/lib/paths";
 import { createLogger } from "@/lib/logger";
+import { scrubDistillRow } from "@/lib/persona/pii-guard";
 
 const log = createLogger("distill-corpus");
 const FILE = dataPath("distill-corpus.jsonl");
@@ -61,8 +62,28 @@ export async function appendDistillRow(row: DistillRow): Promise<void> {
   if (!row.user?.trim() || !row.assistant?.trim()) return;
   if (row.assistant.length < 6) return; // skip ack-only replies
   try {
+    // PII guard — scrub emails / phones / credit cards / SSNs / addresses
+    // from BOTH the user message AND the assistant reply before writing.
+    // This is the only point before the row crosses the public-data
+    // boundary (R2 → GH Actions retrain → HF Hub small-weekly revision).
+    // Fail-open: if the guard errors, we still write the row rather than
+    // dropping training signal, but we log loudly so it's visible.
+    let scrubbed = { user: row.user, assistant: row.assistant, detected: false };
+    try {
+      scrubbed = await scrubDistillRow({ user: row.user, assistant: row.assistant });
+    } catch (e) {
+      log.warn("PII scrub failed — writing row unredacted (review for leakage)", e);
+    }
+    if (scrubbed.detected) {
+      log.info(`distill row had PII; redacted before persist (thread=${row.threadId.slice(0, 8)})`);
+    }
+    const safeRow: DistillRow = {
+      ...row,
+      user: scrubbed.user,
+      assistant: scrubbed.assistant,
+    };
     await mkdir(path.dirname(FILE), { recursive: true });
-    await appendFile(FILE, JSON.stringify(row) + "\n", "utf8");
+    await appendFile(FILE, JSON.stringify(safeRow) + "\n", "utf8");
   } catch (e) {
     log.warn("distill row append failed", e);
   }

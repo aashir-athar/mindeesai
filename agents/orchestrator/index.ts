@@ -347,11 +347,21 @@ export async function* orchestrate(opts: {
   // older than the verbatim recent-turns slice into a few editorial
   // sentences. Effective infinite memory of THIS thread at constant cost.
   const summary = await getSummary(threadId).catch(() => null);
+
+  // Topic routing — zero-shot classify the user message into one of
+  // {code, math, personal, creative, factual, meta} and splice a brief
+  // register/depth hint into the system prompt. Soft hint only — if the
+  // classifier isn't loaded or isn't confident, no change to behaviour.
+  const topic = await (await import("@/lib/persona/topic-router")).classifyTopic(userMessage);
+  const { topicSystemHint } = await import("@/lib/persona/topic-router");
+  const topicHint = topicSystemHint(topic);
+
   const memoryBlockPlus = [
     summary
       ? `${memoryBlock}\n\n## Where this conversation has been so far\n${summary.summary}`
       : memoryBlock,
     reachOutHint,
+    topicHint ? `## Topic register hint\n${topicHint}` : "",
   ].filter(Boolean).join("\n\n");
 
   const systemPrompt = buildMindeesSystemPrompt({

@@ -18,6 +18,7 @@ import path from "node:path";
 import { dataPath } from "@/lib/paths";
 import { streamLLM } from "@/lib/llm/router";
 import { readThread } from "@/lib/memory/conversations";
+import { summarizerPipeline } from "@/lib/ml/transformers-pool";
 import { isoNow, nid } from "@/lib/utils";
 import { createLogger } from "@/lib/logger";
 
@@ -96,31 +97,43 @@ export async function maybeUpdateSummary(opts: {
     .map((m) => `${m.role.toUpperCase()}: ${m.content.slice(0, 400)}`)
     .join("\n");
 
-  let buf = "";
-  try {
-    for await (const chunk of streamLLM({
-      messages: [
-        {
-          id: nid(),
-          role: "user",
-          content: `Conversation so far (older turns only — the recent ones are still in the assistant's context):\n\n${transcript}\n\nWrite the summary now:`,
-          createdAt: isoNow(),
-        },
-      ],
-      system: SUMMARY_PROMPT,
-      temperature: 0.2,
-      maxTokens: 280,
-      signal: opts.signal,
-    })) {
-      if (chunk.type === "text" && chunk.text) buf += chunk.text;
-      if (chunk.type === "finish") break;
+  // First try the LOCAL summariser (distilbart-cnn-6-6, ~150 MB Q8).
+  // It runs on the same function instance — no Groq quota burned, no
+  // network round-trip. Quality is lower than a 70B teacher but plenty
+  // for "the running editorial of where this conversation has been."
+  // If the local model isn't loaded yet (cold instance) OR fails for
+  // any reason, fall back to the cloud LLM router so summaries still
+  // get written. Distilbart's input cap is 1024 tokens, so we slice the
+  // transcript before feeding it.
+  let cleaned = await tryLocalSummary(transcript).catch(() => "");
+
+  if (cleaned.length < 20) {
+    let buf = "";
+    try {
+      for await (const chunk of streamLLM({
+        messages: [
+          {
+            id: nid(),
+            role: "user",
+            content: `Conversation so far (older turns only — the recent ones are still in the assistant's context):\n\n${transcript}\n\nWrite the summary now:`,
+            createdAt: isoNow(),
+          },
+        ],
+        system: SUMMARY_PROMPT,
+        temperature: 0.2,
+        maxTokens: 280,
+        signal: opts.signal,
+      })) {
+        if (chunk.type === "text" && chunk.text) buf += chunk.text;
+        if (chunk.type === "finish") break;
+      }
+    } catch (e) {
+      log.warn("summary llm call failed", e);
+      return existing;
     }
-  } catch (e) {
-    log.warn("summary llm call failed", e);
-    return existing;
+    cleaned = buf.trim().replace(/^["'`]|["'`]$/g, "");
   }
 
-  const cleaned = buf.trim().replace(/^["'`]|["'`]$/g, "");
   if (cleaned.length < 20) return existing;
 
   const updated: ThreadSummary = {
@@ -132,4 +145,32 @@ export async function maybeUpdateSummary(opts: {
   await persist(updated);
   log.info(`summary refreshed for thread ${opts.threadId} @ turn ${opts.currentTurnCount}`);
   return updated;
+}
+
+/** Try the local transformers.js summariser. Returns "" on any failure. */
+async function tryLocalSummary(transcript: string): Promise<string> {
+  // Time-box the model load so a cold instance doesn't stall the cron tick.
+  const pl = await Promise.race([
+    summarizerPipeline(),
+    new Promise<null>((res) => setTimeout(() => res(null), 8000)),
+  ]);
+  if (!pl) return "";
+
+  // distilbart-cnn-6-6 input cap is 1024 tokens (~3800 chars conservative).
+  // Take the LAST chunk of the transcript — most recent older-turns slice
+  // captures the heaviest signal of what the conversation has become.
+  const input = transcript.length > 3800 ? transcript.slice(-3800) : transcript;
+
+  try {
+    const out = (await pl(input, {
+      max_new_tokens: 180,
+      min_new_tokens: 40,
+      do_sample: false,
+    } as unknown as object)) as unknown as Array<{ summary_text?: string }>;
+    const txt = Array.isArray(out) ? out[0]?.summary_text ?? "" : "";
+    return txt.trim().replace(/^["'`]|["'`]$/g, "");
+  } catch (e) {
+    log.warn("local summariser failed", e);
+    return "";
+  }
 }
