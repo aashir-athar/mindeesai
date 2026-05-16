@@ -36,15 +36,15 @@ on:
   workflow_dispatch:
     inputs:
       variant:
-        description: 'Model variant (nano | small)'
+        description: 'Model variant. Default cpu_max_5h_50k is a tiny CPU-friendly variant (~17.5M params, ctx=256) designed to fit 4 runs/day comfortably.'
         required: false
-        default: 'small'
+        default: 'cpu_max_5h_50k'
         type: choice
-        options: [nano, small]
+        options: [cpu_max_5h_50k, nano, small]
       steps:
-        description: 'Training steps per run. Empirically GH Actions CPU does ~22.5 sec/step on the small variant, so 900 steps would need ~5h 37min — the 290m Python timeout will naturally cap actual execution at ~770 steps within the 5h budget, but a faster-than-expected runner can use the full 900. Daily × ~770 ≈ 23k steps/month.'
+        description: 'Training steps per run. Default 1500 finishes in ~25 min on cpu_max_5h_50k variant. The 295m Python timeout is a safety ceiling — most runs complete well before it.'
         required: false
-        default: '900'
+        default: '1500'
       batch:
         description: 'Batch size'
         required: false
@@ -72,30 +72,31 @@ on:
         type: choice
         options: ['true', 'false']
   schedule:
-    # DAILY at 03:00 UTC. GitHub may delay scheduled runs by up to ~30 min.
-    # Each tick resumes from the previous tick's checkpoint on HF, so
-    # learning accumulates across runs.
+    # FOUR TIMES per day at 03:00, 09:00, 15:00, 21:00 UTC.
+    # GH delays may shift by ~30 min but never overlap (each run finishes
+    # in ~25 min on the cpu_max_5h_50k variant).
     #
-    # EMPIRICAL THROUGHPUT (measured from a real run, not theoretical):
-    #   small variant (40.8M params, ctx=2048, batch=4) = ~22.5 sec/step
-    #   In 4h 50min (290 min Python timeout) of training: ~770 steps.
-    #   --steps default is 900 to allow faster-than-expected runners to
-    #   push beyond ~770. Slower runs are capped by the timeout, never
-    #   exceed the 5h training budget.
-    #   Daily × ~770-900 = 23k-27k steps/month of cumulative training.
+    # MODEL & THROUGHPUT
+    #   cpu_max_5h_50k variant: 17.5M params, ctx=256, batch=4
+    #   Estimated ~1 sec/step on ubuntu-latest CPU (tiny model, short ctx)
+    #   1500 steps × 1 sec ≈ 25 min training time
+    #   295-min Python timeout is the SAFETY CEILING, not the target
     #
-    # PUBLIC repos have UNLIMITED Actions minutes on free tier — so 5h
-    # daily runs (~150h/month) cost nothing. Private repos would hit the
-    # 2000-min/month wall in 6 days.
+    # CUMULATIVE DAILY THROUGHPUT
+    #   4 runs/day × ~1500 steps = ~6000 steps/day = ~180k steps/month
+    #   Each run resumes from the previous run's checkpoint on HF
+    #   small-weekly, so steps actually accumulate across all 4 daily runs.
+    #
+    # PUBLIC repos have UNLIMITED Actions minutes on free tier. Even at 4
+    # runs × 5h cap = 20h/day theoretical worst case, this is free.
+    # Realistic actual usage: 4 × 25 min ≈ 100 min/day.
     #
     # REALITY CHECK on capability gain:
-    #   This is intentionally a SLOW continual-training baseline. CPU
-    #   training is ~50-100× slower than GPU. For real capability gains,
-    #   train locally with scripts/train/run-home-max.sh on your RTX —
-    #   one overnight GPU run produces ~3 months of GH Actions output.
-    #   This workflow's value is: always-on, never breaks, public mirror,
-    #   pipeline health check, fallback brain if local training stalls.
-    - cron: '0 3 * * *'
+    #   Continual-training baseline. CPU training is ~50-100× slower than
+    #   GPU. For real capability gains, train locally with run-home-max.sh
+    #   on your RTX. This workflow's value is: always-on, never breaks,
+    #   public mirror, pipeline health check, fallback brain.
+    - cron: '0 3,9,15,21 * * *'
 
 env:
   HF_REPO: aashir-athar/mindeesai-base
@@ -220,20 +221,10 @@ jobs:
               print("· no distill-feedback.jsonl yet (no thumbs given) — all rows weighted equally")
           PY
 
-      - name: Train BPE tokenizer (if missing)
-        run: |
-          if [ ! -s tokenizer/tokenizer.json ]; then
-            python scripts/train/tokenizer_train.py \
-              --corpus scripts/data/corpus.txt \
-              --vocab-size 8000 \
-              --out tokenizer/tokenizer.json
-          fi
-
-      # Pull the previous run's optimizer state from HF small-weekly so this
-      # week's training CONTINUES instead of starting from random init.
-      # Without this, every weekly run was wasting 2000 steps re-learning the
-      # same basics. Now learning accumulates: 30k steps/week × 50 weeks
-      # ≈ 1.5M total steps/year of continual training on real chat data.
+      # Pull the previous run's state from HF small-weekly FIRST, so we know
+      # whether the tokenizer is already available (preserves token-ID
+      # mapping across runs — critical for resume correctness). If HF has
+      # the tokenizer, we use it and skip the fresh tokenizer train below.
       - name: Fetch previous checkpoint from HF (resume)
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
@@ -260,17 +251,29 @@ jobs:
               import subprocess
               subprocess.run([sys.executable, "-m", "pip", "install", "huggingface_hub"], check=True)
               from huggingface_hub import hf_hub_download
-          # Pull both files. base.bin alone is enough to recover model weights;
-          # torch-resume.pt is needed to recover AdamW moments and step count
-          # so training resumes mid-schedule (LR + warmup state, etc.).
+          # Pull the three files needed to faithfully resume training:
+          #   torch-resume.pt  → AdamW moments, step count, LR schedule
+          #   base.bin         → model weights
+          #   tokenizer.json   → CRITICAL — token IDs must match what the
+          #                       saved checkpoint was trained with. Without
+          #                       this, day 2's fresh tokenizer train assigns
+          #                       different IDs to the same words and every
+          #                       embedding lookup goes to the wrong row.
+          import os as _os
           for filename, local in [
               ("torch-resume.pt", "checkpoints/torch-resume.pt"),
               ("base.bin",        "checkpoints/base.bin"),
+              ("tokenizer.json",  "tokenizer/tokenizer.json"),
           ]:
+              # tokenizer.json goes to tokenizer/, the others to checkpoints/.
+              # hf_hub_download lands the file at <local_dir>/<filename>, so
+              # we point local_dir at the target file's parent dir.
+              local_dir = _os.path.dirname(local) or "."
+              _os.makedirs(local_dir, exist_ok=True)
               try:
                   path = hf_hub_download(
                       repo_id=repo, filename=filename, revision=revision,
-                      token=token, local_dir="checkpoints", local_dir_use_symlinks=False,
+                      token=token, local_dir=local_dir, local_dir_use_symlinks=False,
                   )
                   size = os.path.getsize(path)
                   print(f"  ✓ {filename}: {size:,} bytes  → {local}")
@@ -282,13 +285,31 @@ jobs:
                       print(f"  ✗ {filename}: {e}")
           PY
 
+      # Tokenizer training fires ONLY if the HF resume step above didn't pull
+      # one down. On day 1 (first run, nothing on HF yet) this trains fresh.
+      # On day 2+ this is skipped because HF supplied tokenizer.json.
+      # vocab=50000 matches the cpu_max_5h_50k variant. BPE produces as many
+      # merges as the corpus supports — if corpus.txt is small, actual
+      # vocab caps below 50000 and the unused model embedding rows stay
+      # zero-init (harmless dead weight).
+      - name: Train BPE tokenizer (if missing)
+        run: |
+          if [ ! -s tokenizer/tokenizer.json ]; then
+            python scripts/train/tokenizer_train.py \
+              --corpus scripts/data/corpus.txt \
+              --vocab-size 50000 \
+              --out tokenizer/tokenizer.json
+          else
+            echo "tokenizer.json already present (likely from HF resume) — skipping fresh BPE training"
+          fi
+
       - name: Pretrain
         env:
           PYTORCH_ENABLE_MPS_FALLBACK: '1'
-          MIND_VARIANT: ${{ github.event.inputs.variant || 'small' }}
+          MIND_VARIANT: ${{ github.event.inputs.variant || 'cpu_max_5h_50k' }}
         run: |
-          VARIANT="${{ github.event.inputs.variant || 'small' }}"
-          STEPS="${{ github.event.inputs.steps || '900' }}"
+          VARIANT="${{ github.event.inputs.variant || 'cpu_max_5h_50k' }}"
+          STEPS="${{ github.event.inputs.steps || '1500' }}"
           BATCH="${{ github.event.inputs.batch || '4' }}"
           RESUME_FLAG="${{ github.event.inputs.resume || 'true' }}"
           mkdir -p checkpoints data
@@ -331,7 +352,7 @@ jobs:
           # Combined with --ckpt-every 1000, that means a mid-run kill costs
           # at most ~15 min of progress (16 min at 1 step/sec), and the next
           # day's run resumes from the last saved checkpoint.
-          timeout 290m python scripts/train/pretrain.py \
+          timeout 295m python scripts/train/pretrain.py \
             --variant "$VARIANT" \
             --corpus scripts/data/corpus.txt \
             --tokenizer tokenizer/tokenizer.json \
@@ -342,8 +363,8 @@ jobs:
             --warmup 100 \
             --wd 0.1 \
             --val-frac 0.05 \
-            --val-every 100 \
-            --ckpt-every 30 \
+            --val-every 750 \
+            --ckpt-every 250 \
             --base-weight 1.0 \
             --distill-weight 4.0 \
             --completion-only-loss 1 \

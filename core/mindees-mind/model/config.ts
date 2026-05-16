@@ -28,7 +28,8 @@ export type ModelVariant =
   | "moe-base"
   | "home-max"
   | "home-11gb"
-  | "home-moe";
+  | "home-moe"
+  | "cpu_max_5h_50k";
 
 export interface ModelConfig {
   variant: ModelVariant;
@@ -139,6 +140,20 @@ const TABLE: Record<ModelVariant, Omit<ModelConfig, "variant" | "dHead">> = {
     useMTP: true, mtpDepth: 2,
     useMuP: true,
     useReasoning: true, reasoningMaxTokens: 1024,
+  },
+  // ─── CPU-friendly tiny model for the GH Actions daily cron ────────────
+  // ~17.5M params. Mirror of scripts/train/pretrain.py's "cpu_max_5h_50k" row.
+  // Short ctx (256) + no MLA + no MTP = lowest compute per step on CPU.
+  "cpu_max_5h_50k": {
+    vocabSize: 50_000, contextLength: 256, dModel: 256, nLayers: 6,
+    nHeads: 8, nKVHeads: 2, dFFN: 768,
+    ropeBase: 10000, rmsNormEps: 1e-6, tieEmbeddings: true,
+    loraRank: 8, loraAlpha: 16,
+    useMoE: false, numExperts: 1, expertsPerToken: 1, moeLoadBalanceWeight: 0.01,
+    useMLA: false, mlaLatentDim: 64,
+    useMTP: false, mtpDepth: 1,
+    useMuP: true,
+    useReasoning: false, reasoningMaxTokens: 256,
   },
   // ─── 12 GB GPU profile — RTX 4070 / 5070 / 4080 ───────────────────────
   // ~349M params. Mirror of scripts/train/pretrain.py's "home-max" row.

@@ -86,6 +86,26 @@ class Config:
 
 VARIANTS: dict[str, Config] = {
     "nano":  Config("nano",  16000, 1024, 256,  6,  4, 4,  768),
+    # CPU-friendly tiny model purpose-built for the GH Actions daily cron.
+    # Tuned to comfortably fit 4 runs/day × ~5h cap × 1500 steps each.
+    # ~17.5M params (embedding dominates: 50000 × 256 = 12.8M).
+    # Short ctx (256) + no MLA + no MTP = lowest compute per step.
+    # At ~1 sec/step on ubuntu-latest CPU, 1500 steps finishes in ~25 min,
+    # well below the 295-min budget. The 295m wrapper is a safety ceiling.
+    "cpu_max_5h_50k": Config(
+        "cpu_max_5h_50k",
+        50000,      # vocab
+        256,        # context length
+        256,        # d_model
+        6,          # layers
+        8,          # heads (head_dim = 256/8 = 32)
+        2,          # kv heads (GQA 4:1)
+        768,        # ffn (3× d_model, SwiGLU)
+        rope_base=10000.0,
+        use_mla=False,
+        mla_latent_dim=64,   # unused (MLA off)
+        use_mtp=False,
+    ),
     # Bigger small variant (87M params) — wider + deeper than the old 50M version.
     # vocab=8000 matches the tokenizer trained by the GH Actions workflow
     # (.github/workflows/pretrain.yml uses --vocab-size 8000).
