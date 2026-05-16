@@ -13,12 +13,13 @@ import { z } from "zod";
 import { recordThumb } from "@/core/mindees-mind/train/rlhf";
 import { recordDistillFeedback } from "@/lib/memory/distill-corpus";
 import { getRelationship, applyThumb, persistRelationship } from "@/lib/persona";
+import { ThreadIdSchema } from "@/lib/threads/id";
 
 export const runtime = "nodejs";
 
 const BodySchema = z.object({
-  threadId: z.string().min(1).max(64),
-  messageId: z.string().min(1).max(64),
+  threadId: ThreadIdSchema,
+  messageId: z.string().min(1).max(64).regex(/^[a-zA-Z0-9_-]+$/),
   signal: z.enum(["up", "down"]),
 });
 

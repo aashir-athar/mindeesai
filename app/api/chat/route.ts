@@ -19,12 +19,13 @@ import { NextRequest } from "next/server";
 import { orchestrate } from "@/agents/orchestrator";
 import { ensureLanceDBReady } from "@/lib/memory/persistence";
 import { z } from "zod";
+import { ThreadIdSchema } from "@/lib/threads/id";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const BodySchema = z.object({
-  threadId: z.string().min(1).max(64).regex(/^[a-zA-Z0-9_-]+$/),
+  threadId: ThreadIdSchema,
   message: z.string().min(1).max(8000),
 });
 

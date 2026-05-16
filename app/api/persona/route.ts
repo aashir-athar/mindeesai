@@ -30,13 +30,24 @@ import { readInnerThoughts } from "@/lib/persona/inner-voice";
 import { readAffinities } from "@/lib/persona/topic-affinity";
 import { lastJournalEntry } from "@/lib/persona/journal";
 import { ensureLanceDBReady } from "@/lib/memory/persistence";
+import { isValidThreadId } from "@/lib/threads/id";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
   await ensureLanceDBReady().catch(() => {});
-  const threadId = req.nextUrl.searchParams.get("threadId") ?? "default";
+  // Reject anything but a syntactically-valid threadId. Previously this
+  // silently defaulted to "default" which leaked aggregate global state
+  // across users and made every misshapen request appear to "work".
+  const rawThreadId = req.nextUrl.searchParams.get("threadId");
+  if (!rawThreadId || !isValidThreadId(rawThreadId)) {
+    return NextResponse.json(
+      { ok: false, error: "threadId query param missing or invalid (must match [a-zA-Z0-9_-]{1,64})" },
+      { status: 400 },
+    );
+  }
+  const threadId = rawThreadId;
 
   const [mood, userModel, relationship, reward, drift, sentimentArc, beliefs, vocabSig, corrections, innerThoughts, affinities, journal] = await Promise.all([
     getMood(),

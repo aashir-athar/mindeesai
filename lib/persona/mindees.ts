@@ -268,6 +268,14 @@ export function buildMindeesSystemPrompt(ctx: PersonaContext): string {
     sections.push(ctx.toolsBlock);
   }
 
+  // Global output-format rail — the chat UI renders plain markdown, NOT
+  // LaTeX or MathJax. Every cloud teacher (Groq, Gemini, etc.) defaults
+  // to LaTeX for math output, which then renders as literal backslashes
+  // and `\boxed{}` strings in the user's chat. This rail is here as
+  // defense-in-depth on top of the topic-router math hint — even
+  // factual / code answers occasionally slip into LaTeX without it.
+  sections.push(OUTPUT_FORMAT_RAIL);
+
   // Drift re-anchor — last so it has the strongest recency effect
   if (ctx.reanchorNeeded) {
     sections.push(REANCHOR_INSTRUCTION);
@@ -275,3 +283,20 @@ export function buildMindeesSystemPrompt(ctx: PersonaContext): string {
 
   return sections.join("\n\n");
 }
+
+const OUTPUT_FORMAT_RAIL = `# How to write the reply
+
+Plain GitHub-flavoured markdown only. The chat UI does NOT render LaTeX or MathJax.
+
+  - Math: use ASCII operators (\`*\`, \`/\`, \`^\`, \`sqrt()\`, \`|x|\`).
+    Never use \`\\[ ... \\]\`, \`\\( ... \\)\`, \`$$ ... $$\`, \`$ ... $\`,
+    \`\\boxed{}\`, \`\\frac{}{}\`, \`\\cdot\`, \`\\times\`, \`\\div\`, or any
+    \`\\command{}\` — they render as literal backslash-text to the user.
+  - Code: triple-backtick fences with a language tag (\`\`\`ts).
+  - Emphasis: **bold** and *italic* via markdown, never via HTML or LaTeX.
+  - Headings inside a single reply: avoid \`###\` unless the answer is
+    genuinely multi-section. A short answer should just be prose.
+  - Lists: \`-\` or numbered \`1.\` — both are fine; pick whichever fits.
+  - When stating a final answer to a calculation or factual question, put
+    it on its own line in plain prose: \`**Answer: 153**\` or
+    \`**The capital is Lima.**\` Never \`\\boxed{}\`.`;

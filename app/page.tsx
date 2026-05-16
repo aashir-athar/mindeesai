@@ -191,11 +191,11 @@ const BENEFITS = [
   },
   {
     title: "Every conversation makes it better.",
-    body: "Each turn is logged as training data. A cron job runs gradient descent every five minutes on what you said. A weekly retrain folds your chat into the next checkpoint. The model talking to you next week was shaped by the questions you asked this week.",
+    body: "Each turn is logged as training data. A cron loop reflects + persists every ~15 minutes; a weekly retrain folds your chat into the next checkpoint. The model talking to you next week was shaped by the questions you asked this week.",
   },
   {
     title: "Zero dollars to run.",
-    body: "Vercel Hobby for hosting. Cron-job.org for the 5-minute loop. GitHub Actions free CPU for pretraining. Free-tier providers (Groq, Gemini Flash, JINA, DuckDuckGo, Wikipedia, arXiv, Reddit) for everything that touches the open web. The whole stack runs on no card.",
+    body: "Vercel Hobby for hosting. cron-job.org for the ~15-min self-improvement loop. GitHub Actions free CPU for the weekly retrain. Free-tier providers (Groq, Gemini Flash, JINA, DuckDuckGo, Wikipedia, arXiv, Reddit) for everything that touches the open web. The whole stack runs on no card.",
   },
 ];
 
@@ -205,8 +205,8 @@ const STEPS = [
     body: "Each conversation is logged with the system prompt, your message, and the assistant reply. The corpus grows automatically — every turn appends one row, weighted 4× during pretraining.",
   },
   {
-    title: "Every five minutes, the model improves.",
-    body: "A cron tick reflects on recent threads, runs a gradient-descent step on the live model, autonomously researches topics it was uncertain about, and writes a private journal entry to its future self.",
+    title: "Every ~15 minutes, the model thinks.",
+    body: "A cron tick reflects on recent threads, autonomously researches topics it was uncertain about, and writes a private journal entry to its future self. Heavy gradient training runs once a week against the accumulated chat data.",
   },
   {
     title: "Every week, the full retrain runs.",

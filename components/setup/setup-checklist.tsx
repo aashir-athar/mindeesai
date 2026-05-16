@@ -136,7 +136,7 @@ export function SetupChecklist() {
 
       <Row
         status={cronStatus}
-        label="Cron (5-min self-improvement loop)"
+        label="Cron (self-improvement loop)"
         value={
           <>
             configured: {String(health.cron.configured)}
@@ -148,8 +148,8 @@ export function SetupChecklist() {
           cronStatus === "bad" ? (
             <>
               Cron has NEVER reached this endpoint. Check your cron-job.org config:
-              POST to https://YOUR-DOMAIN/api/cron/self-improve every 5 min
-              with header <span className="font-mono">Authorization: Bearer CRON_SECRET</span>.
+              GET <span className="font-mono">https://YOUR-DOMAIN/api/cron/self-improve?token=CRON_SECRET</span>
+              every ~15 min (or header <span className="font-mono">Authorization: Bearer CRON_SECRET</span>).
               Or hit <Link href="/admin" className="text-bone-100 underline">/admin</Link> → &ldquo;Run cron now&rdquo;.
             </>
           ) : cronStatus === "warn" ? (

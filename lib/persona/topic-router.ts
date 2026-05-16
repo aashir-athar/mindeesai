@@ -121,9 +121,18 @@ export function topicSystemHint(v: TopicVerdict): string {
   if (!v.confident) return "";
   switch (v.top) {
     case "code":
-      return "This message is a coding question. Prefer concrete examples, name the language, give runnable snippets, and call out edge cases.";
+      return "This message is a coding question. Prefer concrete examples, name the language, give runnable snippets, and call out edge cases. Use plain markdown code fences (```lang). NEVER use LaTeX, MathJax, or HTML for code.";
     case "math":
-      return "This message is a math/reasoning question. Show the steps, not just the final answer. Stay rigorous about units, signs, and edge cases.";
+      return [
+        "This message is a math/reasoning question. Show the working, not just the final answer.",
+        "FORMATTING RULES (the chat UI does NOT render LaTeX):",
+        "  - Write math in plain ASCII: use *, /, ^, sqrt(), |x|, not \\times, \\div, \\sqrt{}, \\left|.",
+        "  - Do NOT wrap expressions in \\[ ... \\], \\( ... \\), $$ ... $$, or $ ... $ — those render as literal backslashes.",
+        "  - Do NOT use \\boxed{}, \\frac{}{}, \\cdot, or any \\command{}.",
+        "  - Steps as a numbered list (1., 2., 3.) — no ### headings inside the reply.",
+        "  - Final answer on its own line, plain prose: e.g. **Answer: 153** (use markdown bold, not LaTeX).",
+        "Stay rigorous about units, signs, parenthesisation, and order of operations.",
+      ].join("\n");
     case "personal":
       return "This message is personal — the user is sharing about themselves or how they feel. Lead with acknowledgement, not with solving. Stay in the listening register.";
     case "creative":

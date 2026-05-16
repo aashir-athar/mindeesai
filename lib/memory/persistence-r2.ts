@@ -73,6 +73,31 @@ export async function r2Delete(client: R2Client, key: string): Promise<void> {
   throw new Error(`R2 DELETE ${key} failed: ${res.status} ${res.statusText} — ${detail.slice(0, 300)}`);
 }
 
+/**
+ * Delete every object under `prefix`. Returns the count deleted.
+ *
+ * Used for thread-scoped right-to-be-forgotten: deleting a thread locally
+ * is fine for the current process, but the remote bucket would still hold
+ * `data/conversations/<id>.jsonl`, `data/user-models/<id>.json`, etc.
+ * Forever. This function walks the prefix via LIST and deletes each match.
+ *
+ * Idempotent. Quietly succeeds when nothing matches the prefix.
+ */
+export async function r2DeletePrefix(client: R2Client, prefix: string): Promise<number> {
+  const objects = await r2List(client, prefix);
+  if (objects.length === 0) return 0;
+  let deleted = 0;
+  for (const obj of objects) {
+    try {
+      await r2Delete(client, obj.key);
+      deleted++;
+    } catch {
+      // best-effort — a partial wipe is still better than no wipe
+    }
+  }
+  return deleted;
+}
+
 export interface R2Object {
   key: string;
   size: number;

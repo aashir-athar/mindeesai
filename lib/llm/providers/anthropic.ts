@@ -14,13 +14,39 @@ const log = createLogger("anthropic");
 function toAnthropicMessages(messages: Message[]) {
   return messages
     .filter((m) => m.role !== "system")
-    .map((m) => ({
-      role: m.role === "tool" ? "user" : m.role,
-      content:
-        m.role === "tool"
-          ? [{ type: "tool_result", tool_use_id: m.toolCallId ?? "", content: m.content }]
-          : m.content,
-    }));
+    .map((m) => {
+      // Tool result → user message with a tool_result content block.
+      if (m.role === "tool") {
+        return {
+          role: "user",
+          content: [
+            { type: "tool_result", tool_use_id: m.toolCallId ?? "", content: m.content },
+          ],
+        };
+      }
+      // Assistant turn that EMITTED tool calls → must serialize each call as
+      // a tool_use content block alongside any text. Anthropic rejects the
+      // request with 400 if the subsequent tool_result block can't find a
+      // matching tool_use id in the prior assistant message. Same bug shape
+      // as openai.ts fix in commit 0c650e1.
+      if (m.role === "assistant" && m.toolCalls && m.toolCalls.length > 0) {
+        const blocks: Array<Record<string, unknown>> = [];
+        if (m.content && m.content.trim().length > 0) {
+          blocks.push({ type: "text", text: m.content });
+        }
+        for (const tc of m.toolCalls) {
+          blocks.push({
+            type: "tool_use",
+            id: tc.id,
+            name: tc.name,
+            input: typeof tc.args === "object" && tc.args !== null ? tc.args : {},
+          });
+        }
+        return { role: "assistant", content: blocks };
+      }
+      // Plain text turn — works for both user and assistant roles.
+      return { role: m.role, content: m.content };
+    });
 }
 
 export const anthropicProvider: LLMProvider = {

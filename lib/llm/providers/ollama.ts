@@ -34,13 +34,40 @@ async function probe(): Promise<boolean> {
   }
 }
 
-/** Translate our internal Message[] into Ollama's expected wire format. */
+/** Translate our internal Message[] into Ollama's expected wire format.
+ *
+ *  Ollama follows OpenAI's chat-message schema for tool calls — the assistant
+ *  message that requested the tool MUST carry the tool_calls array, and the
+ *  subsequent role="tool" message's tool_call_id must match. Drop tool_calls
+ *  here and Ollama errors on the synthesis hop just like Groq does
+ *  (same bug shape as openai.ts and anthropic.ts).
+ */
 function toOllamaMessages(messages: Message[], system?: string) {
-  const out: Array<{ role: string; content: string; tool_calls?: unknown; tool_call_id?: string }> = [];
+  type OllamaToolCall = { id: string; type: "function"; function: { name: string; arguments: string } };
+  const out: Array<{
+    role: string;
+    content: string | null;
+    tool_calls?: OllamaToolCall[];
+    tool_call_id?: string;
+  }> = [];
   if (system) out.push({ role: "system", content: system });
   for (const m of messages) {
     if (m.role === "tool") {
       out.push({ role: "tool", content: m.content, tool_call_id: m.toolCallId });
+    } else if (m.role === "assistant" && m.toolCalls && m.toolCalls.length > 0) {
+      out.push({
+        role: "assistant",
+        content: m.content && m.content.length > 0 ? m.content : null,
+        tool_calls: m.toolCalls.map((tc) => ({
+          id: tc.id,
+          type: "function" as const,
+          function: {
+            name: tc.name,
+            arguments:
+              typeof tc.args === "string" ? tc.args : JSON.stringify(tc.args ?? {}),
+          },
+        })),
+      });
     } else {
       out.push({ role: m.role, content: m.content });
     }
