@@ -32,6 +32,33 @@ function toOpenAIMessages(messages: Message[], system?: string) {
   for (const m of messages) {
     if (m.role === "tool") {
       out.push({ role: "tool", tool_call_id: m.toolCallId, content: m.content });
+    } else if (m.role === "assistant" && m.toolCalls && m.toolCalls.length > 0) {
+      // Canonical OpenAI / Groq / OpenRouter format for an assistant turn
+      // that requested tool execution. Both the assistant message AND every
+      // subsequent role:"tool" message reference the SAME id via
+      // `tool_call_id`. If we drop `tool_calls` here, the API rejects the
+      // next request with "tool message must follow an assistant message
+      // with tool_calls" — a 400 that cascades through every provider in
+      // the fallback chain (because they all share the OpenAI message
+      // schema). Symptom: any tool-using turn errors at synthesis with
+      // "Every backend I tried just errored out on this one."
+      out.push({
+        role: "assistant",
+        // OpenAI requires `content: null` (not "") when only tool_calls
+        // are present; Groq accepts either but null is the safe choice.
+        content: m.content && m.content.length > 0 ? m.content : null,
+        tool_calls: m.toolCalls.map((tc) => ({
+          id: tc.id,
+          type: "function",
+          function: {
+            name: tc.name,
+            arguments:
+              typeof tc.args === "string"
+                ? tc.args
+                : JSON.stringify(tc.args ?? {}),
+          },
+        })),
+      });
     } else {
       out.push({ role: m.role, content: m.content });
     }
