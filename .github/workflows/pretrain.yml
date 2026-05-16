@@ -342,7 +342,4 @@ jobs:
           print()
           print(f"uploaded {uploaded}/{len(targets)} files to {repo_id}@{revision}")
           print(f"to activate this checkpoint on Vercel, set HF_MODEL_REVISION={revision}")
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
-          HF_REPO: ${{ env.HF_REPO }}
-          HF_REVISION: ${{ env.HF_REVISION }}
+          PY
