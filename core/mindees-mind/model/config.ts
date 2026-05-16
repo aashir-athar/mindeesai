@@ -82,13 +82,17 @@ const TABLE: Record<ModelVariant, Omit<ModelConfig, "variant" | "dHead">> = {
     useReasoning: false, reasoningMaxTokens: 256,
   },
   small: {
-    vocabSize: 32_000, contextLength: 2048, dModel: 512, nLayers: 8,
-    nHeads: 8, nKVHeads: 4, dFFN: 1536,
-    ropeBase: 10000, rmsNormEps: 1e-6, tieEmbeddings: true,
+    // Bumped small variant (~87M params): wider, deeper, MLA on, MTP off.
+    // Must mirror scripts/train/pretrain.py's "small" Config exactly.
+    // vocab=8000 matches the BPE tokenizer trained by the GH Actions
+    // workflow (--vocab-size 8000).
+    vocabSize: 8_000, contextLength: 1536, dModel: 896, nLayers: 10,
+    nHeads: 14, nKVHeads: 7, dFFN: 2304,
+    ropeBase: 500000, rmsNormEps: 1e-6, tieEmbeddings: true,
     loraRank: 8, loraAlpha: 16,
     useMoE: false, numExperts: 1, expertsPerToken: 1, moeLoadBalanceWeight: 0.01,
-    useMLA: true, mlaLatentDim: 128,
-    useMTP: true, mtpDepth: 2,
+    useMLA: true, mlaLatentDim: 160,
+    useMTP: false, mtpDepth: 1,
     useMuP: true,
     useReasoning: true, reasoningMaxTokens: 512,
   },

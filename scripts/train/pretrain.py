@@ -86,7 +86,23 @@ class Config:
 
 VARIANTS: dict[str, Config] = {
     "nano":  Config("nano",  16000, 1024, 256,  6,  4, 4,  768),
-    "small": Config("small", 32000, 2048, 512,  8,  8, 4, 1536, use_mla=True, mla_latent_dim=128, use_mtp=True, mtp_depth=2),
+    # Bigger small variant (87M params) — wider + deeper than the old 50M version.
+    # vocab=8000 matches the tokenizer trained by the GH Actions workflow
+    # (.github/workflows/pretrain.yml uses --vocab-size 8000).
+    "small": Config(
+        "small",
+        8000,       # vocab — MUST match tokenizer.json's vocab size
+        1536,       # context length
+        896,        # d_model
+        10,         # layers
+        14,         # heads (head_dim = 896/14 = 64)
+        7,          # kv heads (GQA 2:1)
+        2304,       # ffn (≈ 2.57 × d_model, SwiGLU expansion)
+        rope_base=500000.0,
+        use_mla=True,
+        mla_latent_dim=160,
+        use_mtp=False,
+    ),
     "base":  Config("base",  50000, 4096, 1024, 12, 16, 8, 2816, rope_base=500000.0, use_mla=True, mla_latent_dim=256, use_mtp=True, mtp_depth=2),
     "large": Config("large", 64000, 8192, 2048, 24, 32, 8, 5632, rope_base=500000.0, use_mla=True, mla_latent_dim=512, use_mtp=True, mtp_depth=3),
     "moe-small": Config("moe-small", 32000, 2048, 512,  8,  8, 4, 1024, use_moe=True, num_experts=8,  experts_per_token=2, use_mla=True, mla_latent_dim=128, use_mtp=True),
