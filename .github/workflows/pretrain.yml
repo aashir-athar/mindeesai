@@ -42,9 +42,9 @@ on:
         type: choice
         options: [nano, small]
       steps:
-        description: 'Training steps'
+        description: 'Training steps per run (default 20000 ≈ 5-5.5h on CPU, near the 6h hard cap). Daily × 20k = 140k+ steps/week, 600k+ steps/month with resume on.'
         required: false
-        default: '2000'
+        default: '20000'
       batch:
         description: 'Batch size'
         required: false
@@ -62,12 +62,25 @@ on:
         required: false
         default: 'databricks/databricks-dolly-15k'
       mix_config:
-        description: 'Optional --mix-config path (e.g. scripts/data/mix-broadbrain.json). Empty for simple two-dataset mix.'
+        description: 'Multi-dataset recipe path (default: scripts/data/mix-broadbrain.json for code+math+reasoning+chat coverage)'
         required: false
-        default: ''
+        default: 'scripts/data/mix-broadbrain.json'
+      resume:
+        description: 'Resume from last week''s checkpoint on HF (recommended — accumulates training)'
+        required: false
+        default: 'true'
+        type: choice
+        options: ['true', 'false']
   schedule:
-    # Sundays at 03:00 UTC. GitHub may delay scheduled runs by up to ~30 min.
-    - cron: '0 3 * * 0'
+    # DAILY at 03:00 UTC. GitHub may delay scheduled runs by up to ~30 min.
+    # Each tick resumes from the previous tick's checkpoint on HF, so
+    # learning accumulates: 20k steps/day × 30 days ≈ 600k steps/month
+    # of continual training on the latest distill corpus.
+    # PUBLIC repos have UNLIMITED Actions minutes on free tier — so 5.5h
+    # daily runs (~165h/month) cost nothing. Private repos would hit the
+    # 2000-min/month wall in 6 days, so use a private repo here only if
+    # you're willing to pay for overage or drop to fewer/shorter runs.
+    - cron: '0 3 * * *'
 
 env:
   HF_REPO: aashir-athar/mindeesai-base
@@ -196,14 +209,68 @@ jobs:
               --out tokenizer/tokenizer.json
           fi
 
+      # Pull the previous run's optimizer state from HF small-weekly so this
+      # week's training CONTINUES instead of starting from random init.
+      # Without this, every weekly run was wasting 2000 steps re-learning the
+      # same basics. Now learning accumulates: 30k steps/week × 50 weeks
+      # ≈ 1.5M total steps/year of continual training on real chat data.
+      - name: Fetch previous checkpoint from HF (resume)
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_REPO:     ${{ env.HF_REPO }}
+          HF_REVISION: ${{ env.HF_REVISION }}
+          RESUME_FLAG: ${{ github.event.inputs.resume || 'true' }}
+        run: |
+          if [ "$RESUME_FLAG" != "true" ]; then
+            echo "resume=false — starting from random initialisation"
+            exit 0
+          fi
+          mkdir -p checkpoints
+          python - <<'PY'
+          import os, sys
+          token = os.environ.get("HF_TOKEN", "")
+          repo = os.environ.get("HF_REPO", "aashir-athar/mindeesai-base")
+          revision = os.environ.get("HF_REVISION", "small-weekly")
+          if not token:
+              print("· no HF_TOKEN — skipping resume fetch (will train from scratch)")
+              sys.exit(0)
+          try:
+              from huggingface_hub import hf_hub_download
+          except ImportError:
+              import subprocess
+              subprocess.run([sys.executable, "-m", "pip", "install", "huggingface_hub"], check=True)
+              from huggingface_hub import hf_hub_download
+          # Pull both files. base.bin alone is enough to recover model weights;
+          # torch-resume.pt is needed to recover AdamW moments and step count
+          # so training resumes mid-schedule (LR + warmup state, etc.).
+          for filename, local in [
+              ("torch-resume.pt", "checkpoints/torch-resume.pt"),
+              ("base.bin",        "checkpoints/base.bin"),
+          ]:
+              try:
+                  path = hf_hub_download(
+                      repo_id=repo, filename=filename, revision=revision,
+                      token=token, local_dir="checkpoints", local_dir_use_symlinks=False,
+                  )
+                  size = os.path.getsize(path)
+                  print(f"  ✓ {filename}: {size:,} bytes  → {local}")
+              except Exception as e:
+                  msg = str(e).lower()
+                  if "404" in msg or "not found" in msg or "entry not found" in msg:
+                      print(f"  · {filename}: first run on this revision (no prior checkpoint to resume from)")
+                  else:
+                      print(f"  ✗ {filename}: {e}")
+          PY
+
       - name: Pretrain
         env:
           PYTORCH_ENABLE_MPS_FALLBACK: '1'
           MIND_VARIANT: ${{ github.event.inputs.variant || 'small' }}
         run: |
           VARIANT="${{ github.event.inputs.variant || 'small' }}"
-          STEPS="${{ github.event.inputs.steps || '2000' }}"
+          STEPS="${{ github.event.inputs.steps || '20000' }}"
           BATCH="${{ github.event.inputs.batch || '4' }}"
+          RESUME_FLAG="${{ github.event.inputs.resume || 'true' }}"
           mkdir -p checkpoints data
           HF_ARGS=""
           HF_DS="${{ github.event.inputs.hf_dataset || 'roneneldan/TinyStories' }}"
@@ -221,9 +288,17 @@ jobs:
             DISTILL_ARGS="--distill-corpus data/distill-corpus.jsonl"
           fi
           MIX_ARGS=""
-          MIX_CFG="${{ github.event.inputs.mix_config || '' }}"
+          MIX_CFG="${{ github.event.inputs.mix_config || 'scripts/data/mix-broadbrain.json' }}"
           if [ -n "$MIX_CFG" ] && [ -f "$MIX_CFG" ]; then
             MIX_ARGS="--mix-config $MIX_CFG"
+            echo "Using multi-dataset mix from $MIX_CFG"
+          fi
+          # If resume is requested AND the resume .pt actually arrived,
+          # pass --resume so pretrain.py picks up AdamW moments + step count.
+          RESUME_ARGS=""
+          if [ "$RESUME_FLAG" = "true" ] && [ -s checkpoints/torch-resume.pt ]; then
+            RESUME_ARGS="--resume checkpoints/torch-resume.pt"
+            echo "Resuming from prior checkpoint (torch-resume.pt detected)"
           fi
           python scripts/train/pretrain.py \
             --variant "$VARIANT" \
@@ -235,12 +310,13 @@ jobs:
             --lr 3e-4 \
             --warmup 100 \
             --val-frac 0.05 \
-            --val-every 200 \
-            --ckpt-every 500 \
+            --val-every 500 \
+            --ckpt-every 2000 \
             --base-weight 1.0 \
             --distill-weight 4.0 \
             --completion-only-loss 1 \
             --persona-loss-weight 0.05 \
+            $RESUME_ARGS \
             $DISTILL_ARGS \
             $HF_ARGS \
             $DIALOGUE_ARGS \
