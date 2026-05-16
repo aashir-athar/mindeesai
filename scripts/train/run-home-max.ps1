@@ -27,10 +27,12 @@
 param(
     [switch]$Resume,
     [string]$Variant = "home-max",
-    [int]$Steps = 30000,
+    [int]$Steps = 50000,
     [int]$Batch = 4,
     [int]$GradAccum = 8,
-    [switch]$NoCompile  # pass -NoCompile if torch.compile fails on your CUDA/Triton stack
+    [switch]$NoCompile,    # pass -NoCompile if torch.compile fails on your CUDA/Triton stack
+    [switch]$NoGradCkpt,   # pass -NoGradCkpt to disable gradient checkpointing (uses more VRAM, ~30% faster)
+    [string]$MixConfig = "" # optional path to a --mix-config JSON recipe (see scripts/data/mix-broadbrain.json)
 )
 
 # Wrap in try/catch so a double-clicked invocation stays open on error.
@@ -90,16 +92,31 @@ else:
         $compileArg = @("--compile")
     }
 
+    $gradCkptArg = @()
+    if (-not $NoGradCkpt) {
+        $gradCkptArg = @("--grad-ckpt")
+    }
+
+    $mixArg = @()
+    if ($MixConfig) {
+        if (-not (Test-Path $MixConfig)) {
+            Write-Host "ERROR: -MixConfig file not found: $MixConfig" -ForegroundColor Red
+            exit 1
+        }
+        $mixArg = @("--mix-config", $MixConfig)
+    }
+
     $effective = $Batch * $GradAccum
 
     Write-Host ""
-    Write-Host "--- Launching MindeesAI home-max training ---" -ForegroundColor Cyan
+    Write-Host "--- Launching MindeesAI training ---" -ForegroundColor Cyan
     Write-Host "  variant:        $Variant"
     Write-Host "  steps:          $Steps"
     Write-Host "  batch:          $Batch (x grad_accum $GradAccum = effective $effective)"
-    Write-Host "  precision:      bf16 autocast (--amp)"
-    Write-Host "  grad-ckpt:      ENABLED"
+    Write-Host "  precision:      fp16 autocast (--amp)"
+    Write-Host "  grad-ckpt:      $(if ($NoGradCkpt) {'DISABLED (-NoGradCkpt)'} else {'ENABLED'})"
     Write-Host "  torch.compile:  $(if ($NoCompile) {'DISABLED (-NoCompile)'} else {'ENABLED'})"
+    Write-Host "  mix-config:     $(if ($MixConfig) {$MixConfig} else {'(none - default 2-dataset mix)'})"
     Write-Host ""
 
     python scripts/train/pretrain.py `
@@ -124,11 +141,10 @@ else:
         --hf-weight 1.5 `
         --hf-max-tokens 500000 `
         --amp `
-        --grad-ckpt `
         --log data/training-metrics.jsonl `
         --out checkpoints/base.bin `
         --torch-ckpt checkpoints/torch-resume.pt `
-        @compileArg @resumeArg @distillArg
+        @gradCkptArg @compileArg @mixArg @resumeArg @distillArg
 
     $pyExit = $LASTEXITCODE
     if ($pyExit -ne 0) {

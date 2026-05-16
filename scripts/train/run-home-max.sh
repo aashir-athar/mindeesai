@@ -11,11 +11,15 @@
 #   --resume          Resume from checkpoints/torch-resume.pt
 #   --no-compile      Disable torch.compile
 #   --no-grad-ckpt    Disable gradient checkpointing (use if backward crashes)
-#   --variant VAR     Model variant (default: home-max)
-#   --steps N         Training steps (default: 30000)
-#   --batch N         Batch size (default: 4)
-#   --grad-accum N    Gradient accumulation steps (default: 8)
-#   --hf-token TOKEN  HuggingFace token for faster/private dataset downloads
+#   --variant VAR       Model variant (default: home-max)
+#   --steps N           Training steps (default: 50000)
+#   --batch N           Batch size (default: 4)
+#   --grad-accum N      Gradient accumulation steps (default: 8)
+#   --hf-token TOKEN    HuggingFace token for faster/private dataset downloads
+#   --mix-config PATH   JSON recipe describing extra HF datasets (see
+#                       scripts/data/mix-broadbrain.json). Adds N data
+#                       streams on TOP of the default dialogue + hf-stream
+#                       pair. Empty by default — backward compatible.
 
 set -euo pipefail
 
@@ -28,6 +32,7 @@ STEPS=50000
 BATCH=4
 GRAD_ACCUM=8
 HF_TOKEN="${HF_TOKEN:-}"  # Can be pre-set in environment or passed as --hf-token
+MIX_CONFIG=""
 
 # ─── Argument parsing ─────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -40,6 +45,7 @@ while [[ $# -gt 0 ]]; do
         --batch)        BATCH="$2"; shift ;;
         --grad-accum)   GRAD_ACCUM="$2"; shift ;;
         --hf-token)     HF_TOKEN="$2"; shift ;;
+        --mix-config)   MIX_CONFIG="$2"; shift ;;
         *) echo "Unknown option: $1" >&2; exit 1 ;;
     esac
     shift
@@ -116,16 +122,26 @@ if [[ $NO_GRAD_CKPT -eq 0 ]]; then
     GRAD_CKPT_ARGS=("--grad-ckpt")
 fi
 
+MIX_ARGS=()
+if [[ -n "$MIX_CONFIG" ]]; then
+    if [[ ! -f "$MIX_CONFIG" ]]; then
+        echo "ERROR: --mix-config file not found: $MIX_CONFIG" >&2
+        exit 1
+    fi
+    MIX_ARGS=("--mix-config" "$MIX_CONFIG")
+fi
+
 EFFECTIVE=$(( BATCH * GRAD_ACCUM ))
 
 echo ""
-echo "--- Launching MindeesAI home-max training ---"
+echo "--- Launching MindeesAI training ---"
 echo "  variant:        $VARIANT"
 echo "  steps:          $STEPS"
 echo "  batch:          $BATCH (x grad_accum $GRAD_ACCUM = effective $EFFECTIVE)"
-echo "  precision:      bf16 autocast (--amp)"
+echo "  precision:      fp16 autocast (--amp)"
 echo "  grad-ckpt:      $([ $NO_GRAD_CKPT -eq 1 ] && echo 'DISABLED (--no-grad-ckpt)' || echo 'ENABLED')"
 echo "  torch.compile:  $([ $NO_COMPILE -eq 1 ] && echo 'DISABLED (--no-compile)' || echo 'ENABLED')"
+echo "  mix-config:     $([ -n "$MIX_CONFIG" ] && echo "$MIX_CONFIG" || echo '(none — using default 2-dataset mix)')"
 echo ""
 
 # ─── Launch training ──────────────────────────────────────────────────────────
@@ -156,6 +172,7 @@ python3 scripts/train/pretrain.py \
     --torch-ckpt checkpoints/torch-resume.pt \
     "${GRAD_CKPT_ARGS[@]}" \
     "${COMPILE_ARGS[@]}" \
+    "${MIX_ARGS[@]}" \
     "${RESUME_ARGS[@]}" \
     "${DISTILL_ARGS[@]}"
 
