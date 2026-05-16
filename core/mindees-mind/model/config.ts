@@ -8,7 +8,15 @@
  *   - useMuP       — µP scaling: width-invariant init + LR
  *
  * Variant is environment-driven:
- *   MIND_VARIANT=nano|small|base|large|moe-small|moe-base    (default: small)
+ *   MIND_VARIANT = nano | small | base | large
+ *                | moe-small | moe-base
+ *                | home-max | home-11gb | home-moe
+ *   (default: small)
+ *
+ * The home-* variants must mirror the Python-side VARIANTS table in
+ * scripts/train/pretrain.py exactly. Checkpoints from training carry a
+ * variant tag in their config header; loadNativeCheckpoint warns on
+ * mismatch and falls back to best-effort shape loading.
  */
 
 export type ModelVariant =
@@ -17,7 +25,10 @@ export type ModelVariant =
   | "base"
   | "large"
   | "moe-small"
-  | "moe-base";
+  | "moe-base"
+  | "home-max"
+  | "home-11gb"
+  | "home-moe";
 
 export interface ModelConfig {
   variant: ModelVariant;
@@ -120,6 +131,47 @@ const TABLE: Record<ModelVariant, Omit<ModelConfig, "variant" | "dHead">> = {
     ropeBase: 500000, rmsNormEps: 1e-6, tieEmbeddings: true,
     loraRank: 16, loraAlpha: 32,
     useMoE: true, numExperts: 16, expertsPerToken: 2, moeLoadBalanceWeight: 0.01,
+    useMLA: true, mlaLatentDim: 256,
+    useMTP: true, mtpDepth: 2,
+    useMuP: true,
+    useReasoning: true, reasoningMaxTokens: 1024,
+  },
+  // ─── 12 GB GPU profile — RTX 4070 / 5070 / 4080 ───────────────────────
+  // ~349M params. Mirror of scripts/train/pretrain.py's "home-max" row.
+  "home-max": {
+    vocabSize: 50_000, contextLength: 4096, dModel: 1280, nLayers: 16,
+    nHeads: 20, nKVHeads: 5, dFFN: 3584,
+    ropeBase: 500000, rmsNormEps: 1e-6, tieEmbeddings: true,
+    loraRank: 16, loraAlpha: 32,
+    useMoE: false, numExperts: 1, expertsPerToken: 1, moeLoadBalanceWeight: 0.01,
+    useMLA: true, mlaLatentDim: 320,
+    useMTP: true, mtpDepth: 2,
+    useMuP: true,
+    useReasoning: true, reasoningMaxTokens: 1024,
+  },
+  // ─── 11 GB usable profile — RTX 5070 in WSL2, 5060 Ti ─────────────────
+  // ~280M params. Mirror of scripts/train/pretrain.py's "home-11gb" row.
+  // Deeper (20L) and narrower (d_model 1024) than home-max — the depth-
+  // beats-width recipe shown by SmolLM2 / Phi-3 / OLMo at sub-1B scale.
+  "home-11gb": {
+    vocabSize: 50_000, contextLength: 4096, dModel: 1024, nLayers: 20,
+    nHeads: 16, nKVHeads: 4, dFFN: 2816,
+    ropeBase: 500000, rmsNormEps: 1e-6, tieEmbeddings: true,
+    loraRank: 16, loraAlpha: 32,
+    useMoE: false, numExperts: 1, expertsPerToken: 1, moeLoadBalanceWeight: 0.01,
+    useMLA: true, mlaLatentDim: 256,
+    useMTP: true, mtpDepth: 2,
+    useMuP: true,
+    useReasoning: true, reasoningMaxTokens: 1024,
+  },
+  // ─── Sparse home variant — MoE for higher capacity at same VRAM ───────
+  // Mirror of scripts/train/pretrain.py's "home-moe" row.
+  "home-moe": {
+    vocabSize: 50_000, contextLength: 4096, dModel: 1024, nLayers: 14,
+    nHeads: 16, nKVHeads: 4, dFFN: 1408,
+    ropeBase: 500000, rmsNormEps: 1e-6, tieEmbeddings: true,
+    loraRank: 16, loraAlpha: 32,
+    useMoE: true, numExperts: 8, expertsPerToken: 2, moeLoadBalanceWeight: 0.01,
     useMLA: true, mlaLatentDim: 256,
     useMTP: true, mtpDepth: 2,
     useMuP: true,

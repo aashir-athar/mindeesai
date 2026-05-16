@@ -92,13 +92,32 @@ VARIANTS: dict[str, Config] = {
     "moe-small": Config("moe-small", 32000, 2048, 512,  8,  8, 4, 1024, use_moe=True, num_experts=8,  experts_per_token=2, use_mla=True, mla_latent_dim=128, use_mtp=True),
     "moe-base":  Config("moe-base",  50000, 4096, 1024, 12, 16, 8, 1408, rope_base=500000.0, use_moe=True, num_experts=16, experts_per_token=2, use_mla=True, mla_latent_dim=256, use_mtp=True),
     # ─── Tuned for a single 12GB consumer GPU (RTX 4070/5070/4080-class) ──
-    # ~280M params, 16 layers × d_model 1280, fp16 + grad-ckpt → fits 12GB
+    # ~349M params, 16 layers × d_model 1280, fp16 + grad-ckpt → fits 12GB
     # at batch=8 with seq=4096. The single best quality you can train at
     # home in one overnight run on consumer hardware.
     "home-max": Config(
         "home-max", 50000, 4096, 1280, 16, 20, 5, 3584,
         rope_base=500000.0,
         use_mla=True, mla_latent_dim=320,
+        use_mtp=True, mtp_depth=2,
+    ),
+    # ─── Tuned for an 11 GB usable budget (RTX 5070 / 5060 Ti, WSL2) ───────
+    # ~280M params, 20 layers × d_model 1024 — DEEPER and NARROWER than
+    # home-max. Modern small-LLM consensus (SmolLM2, Phi-3, OLMo): at sub-
+    # 1B scale, depth beats width for the same param budget — compositional
+    # reasoning improves more per param when layers go up rather than
+    # d_model out.
+    #
+    # Training memory at batch=4, grad-ckpt ON, fp16 autocast, ctx=4096:
+    #   fixed (~18 bytes/param × 280M)  ~5.0 GB
+    #   CUDA + framework overhead       ~1.5 GB
+    #   activations (20 layers × ckpt)  ~1.3 GB
+    #   total peak                      ~7.8 GB  ≈  71 % of 11 GB
+    # Pushes to ~80 % at batch=6 if you want full quota.
+    "home-11gb": Config(
+        "home-11gb", 50000, 4096, 1024, 20, 16, 4, 2816,
+        rope_base=500000.0,
+        use_mla=True, mla_latent_dim=256,
         use_mtp=True, mtp_depth=2,
     ),
     # ─── Sparse alternative: MoE for higher capacity at same VRAM ─────────
