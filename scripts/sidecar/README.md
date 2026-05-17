@@ -6,7 +6,7 @@ colorTo: green
 sdk: docker
 app_port: 7860
 pinned: false
-short_description: Native ML + vector sidecar for MindeesAI on Cloudflare Workers
+short_description: LanceDB + transformers.js sidecar for MindeesAI
 ---
 
 # MindeesAI sidecar
