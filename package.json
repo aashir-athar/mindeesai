@@ -12,9 +12,9 @@
     "bootstrap": "node scripts/bootstrap.mjs",
     "vercel-build": "node scripts/vercel-build.mjs && next build",
     "tokenizer:train": "python scripts/train/tokenizer_train.py",
-    "cf:build": "opennextjs-cloudflare build",
-    "cf:preview": "opennextjs-cloudflare preview",
-    "cf:deploy": "opennextjs-cloudflare build && opennextjs-cloudflare deploy",
+    "cf:build": "next build --webpack && opennextjs-cloudflare build --skipNextBuild",
+    "cf:preview": "npm run cf:build && opennextjs-cloudflare preview",
+    "cf:deploy": "npm run cf:build && opennextjs-cloudflare deploy",
     "sidecar:dev": "npm --prefix scripts/sidecar run dev",
     "sidecar:start": "npm --prefix scripts/sidecar start"
   },
