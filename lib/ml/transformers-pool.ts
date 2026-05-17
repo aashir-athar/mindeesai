@@ -1,159 +1,154 @@
 /**
- * Centralised transformers.js pipeline cache.
+ * transformers.js pipeline shims — back the legacy pipeline interface with
+ * sidecar HTTP calls.
  *
- * Every place that loads a transformers.js model goes through here so:
- *   - models are lazy-loaded on first use (no cold-start tax until needed)
- *   - the same model is never loaded twice on the same function instance
- *   - graceful fallback: if a download fails the caller gets null, not a throw
+ * Pipeline runtime moved entirely into the sidecar (scripts/sidecar/) so
+ * the main app's Cloudflare Workers deploy doesn't need to bundle the
+ * native onnxruntime-node binaries.
  *
- * Memory budget on Vercel Hobby (~1024 MB total function memory):
+ * Each `xxxPipeline()` returns either:
+ *   - A closure shaped like the original transformers.js pipeline output,
+ *     which internally fetches the sidecar — callers don't change.
+ *   - `null` when the sidecar isn't configured, forcing every caller's
+ *     existing "fall back to rule-based" branch.
  *
- *   Always loaded if used:
- *     emotion classifier             ~80 MB  (Q8)
- *     BGE embedder                   ~40 MB  (Q8)
- *
- *   Added in earlier batch:
- *     ms-marco reranker              ~30 MB  (Q8)
- *     twitter-roberta sentiment      ~60 MB  (Q8)
- *     bert-base-NER                 ~110 MB  (Q8)
- *     toxic-bert                    ~110 MB  (Q8)
- *
- *   Added in this batch (Tier 1 — safety + routing + summarisation):
- *     PII detector (deberta-base)    ~75 MB  (Q8)
- *     zero-shot NLI (deberta-xsmall) ~50 MB  (Q8)
- *     summariser (distilbart-cnn-6-6)~150 MB (Q8)
- *
- *   Subtotal worst case:           ~705 MB  (all loaded simultaneously)
- *   Plus baseline runtime:         ~400 MB
- *   Headroom under Hobby limit:    -80 MB (TIGHT — but models are lazy-loaded
- *                                          and rarely all live at once. The
- *                                          PII + summariser paths fire on
- *                                          different timescales.)
- *
- * Every model is loaded with `dtype: "q8"` for the smallest viable footprint.
- * First-call latency: ~5-15s per model on cold function. Steady-state: ~10-100ms.
+ * Reshaping happens here once so 14 call sites stay verbatim.
  */
 
 import { createLogger } from "@/lib/logger";
+import { isSidecarConfigured, sidecarClassify, sidecarSummarize, sidecarRerank } from "@/lib/sidecar/client";
 
 const log = createLogger("transformers-pool");
 
 type AnyPipeline = (...args: unknown[]) => Promise<unknown>;
 
-interface ModelSpec {
-  /** transformers.js pipeline task — one of: "text-classification",
-   *  "token-classification", "feature-extraction", "fill-mask", "summarization",
-   *  "question-answering", "zero-shot-classification", etc. */
-  task: string;
-  model: string;
-  /** Quantization. "q8" is the safe small default. */
-  dtype?: "q4" | "q8" | "fp16" | "fp32";
+// ─── PII (token-classification) ─────────────────────────────────────────
+
+export async function piiPipeline(): Promise<AnyPipeline | null> {
+  if (!isSidecarConfigured()) return null;
+  return (async (...args: unknown[]) => {
+    const text = String(args[0] ?? "");
+    // pii-guard.ts has a fast-path: post directly to /pii (returns redacted
+    // text + spans). But the pipeline contract used by older callers
+    // expects token-classification output. Wrap /pii so legacy shape works.
+    // We re-route through /classify with task=ner to get token-class output.
+    // Note: NER tags differ from PII tags — pii-guard.ts switched to using
+    // sidecarPii() directly so this path is mainly for completeness.
+    const out = await sidecarClassify({ task: "ner", text });
+    return (out?.entities ?? []).map((e) => ({
+      entity: e.entity,
+      entity_group: e.entity,
+      word: e.word,
+      start: e.start,
+      end: e.end,
+      score: e.score,
+    }));
+  }) as AnyPipeline;
 }
 
-const cache = new Map<string, Promise<AnyPipeline | null>>();
+// ─── NER (token-classification) ─────────────────────────────────────────
 
-/**
- * Get a lazily-loaded transformers.js pipeline, cached for the lifetime of
- * the function instance. Returns null on any load failure — caller should
- * fall back to rule-based behaviour.
- */
-export async function getPipeline(spec: ModelSpec): Promise<AnyPipeline | null> {
-  const key = `${spec.task}::${spec.model}::${spec.dtype ?? "q8"}`;
-  if (cache.has(key)) return cache.get(key)!;
-  const p = (async (): Promise<AnyPipeline | null> => {
-    try {
-      const { pipeline } = await import("@huggingface/transformers");
-      log.info(`loading ${spec.task} model ${spec.model} (${spec.dtype ?? "q8"})...`);
-      const t0 = performance.now();
-      const pl = (await pipeline(spec.task as never, spec.model, {
-        dtype: spec.dtype ?? "q8",
-      })) as unknown as AnyPipeline;
-      log.info(`  loaded ${spec.model} in ${(performance.now() - t0).toFixed(0)}ms`);
-      return pl;
-    } catch (e) {
-      log.warn(`could not load ${spec.model} — falling back to rule-based`, e);
-      return null;
-    }
-  })();
-  cache.set(key, p);
-  return p;
+export async function nerPipeline(): Promise<AnyPipeline | null> {
+  if (!isSidecarConfigured()) return null;
+  return (async (...args: unknown[]) => {
+    const text = String(args[0] ?? "");
+    const out = await sidecarClassify({ task: "ner", text });
+    return (out?.entities ?? []).map((e) => ({
+      entity_group: e.entity,
+      entity: e.entity,
+      word: e.word,
+      start: e.start,
+      end: e.end,
+      score: e.score,
+    }));
+  }) as AnyPipeline;
 }
 
-// ─── Named specs for the four models we use ──────────────────────────────
+// ─── Sentiment (text-classification) ────────────────────────────────────
+
+export async function sentimentPipeline(): Promise<AnyPipeline | null> {
+  if (!isSidecarConfigured()) return null;
+  return (async (...args: unknown[]) => {
+    const text = String(args[0] ?? "");
+    const out = await sidecarClassify({ task: "sentiment", text });
+    return out?.labels ?? [];
+  }) as AnyPipeline;
+}
+
+// ─── Toxicity (text-classification) ─────────────────────────────────────
+
+export async function toxicityPipeline(): Promise<AnyPipeline | null> {
+  if (!isSidecarConfigured()) return null;
+  return (async (...args: unknown[]) => {
+    const text = String(args[0] ?? "");
+    const out = await sidecarClassify({ task: "toxicity", text });
+    return out?.labels ?? [];
+  }) as AnyPipeline;
+}
+
+// ─── Zero-shot classification ───────────────────────────────────────────
+
+export async function zeroShotPipeline(): Promise<AnyPipeline | null> {
+  if (!isSidecarConfigured()) return null;
+  return (async (...args: unknown[]) => {
+    const text = String(args[0] ?? "");
+    const labels = Array.isArray(args[1]) ? (args[1] as string[]) : [];
+    const out = await sidecarClassify({ task: "zero-shot", text, labels });
+    const ls = out?.labels ?? [];
+    return {
+      sequence: text,
+      labels: ls.map((x) => x.label),
+      scores: ls.map((x) => x.score),
+    };
+  }) as AnyPipeline;
+}
+
+// ─── Summarizer ─────────────────────────────────────────────────────────
+
+export async function summarizerPipeline(): Promise<AnyPipeline | null> {
+  if (!isSidecarConfigured()) return null;
+  return (async (...args: unknown[]) => {
+    const text = String(args[0] ?? "");
+    const opts = (args[1] ?? {}) as { max_length?: number; min_length?: number };
+    const summary = await sidecarSummarize({
+      text,
+      maxLength: opts.max_length,
+      minLength: opts.min_length,
+    });
+    return summary ? [{ summary_text: summary }] : [];
+  }) as AnyPipeline;
+}
+
+// ─── Reranker (cross-encoder text-classification) ───────────────────────
+
+export async function rerankerPipeline(): Promise<AnyPipeline | null> {
+  if (!isSidecarConfigured()) return null;
+  return (async (...args: unknown[]) => {
+    // Legacy contract: pl({text, text_pair}) returns [{label, score}].
+    // The sidecar /rerank endpoint is batch-oriented; for a single pair we
+    // emulate the old single-pair contract by sending one document.
+    const pair = args[0] as { text?: string; text_pair?: string };
+    if (!pair?.text || !pair.text_pair) return [{ label: "NEG", score: 0 }];
+    const out = await sidecarRerank({ query: pair.text, documents: [pair.text_pair] });
+    const score = out?.results?.[0]?.score ?? 0;
+    return [{ label: "POS", score }];
+  }) as AnyPipeline;
+}
+
+// ─── Compat exports (unused now, kept for type compat in case any tooling
+// still references MODELS). Each spec points at the model the SIDECAR
+// loads — the main app no longer loads any of these locally.
 
 export const MODELS = {
-  /** Cross-encoder reranker for retrieved memories / web hits. */
-  reranker: {
-    task: "text-classification",
-    model: "Xenova/ms-marco-MiniLM-L-12-v2",
-    dtype: "q8" as const,
-  },
-  /** 3-class sentiment (negative / neutral / positive) trained on Twitter —
-   *  handles sarcasm + ironic register better than the broader emotion model. */
-  sentiment: {
-    task: "text-classification",
-    model: "Xenova/twitter-roberta-base-sentiment-latest",
-    dtype: "q8" as const,
-  },
-  /** Named-entity recognition (PER / LOC / ORG / MISC). */
-  ner: {
-    task: "token-classification",
-    model: "Xenova/bert-base-NER",
-    dtype: "q8" as const,
-  },
-  /** Toxicity classifier (toxic / severe_toxic / obscene / threat / insult / identity_hate). */
-  toxicity: {
-    task: "text-classification",
-    model: "Xenova/toxic-bert",
-    dtype: "q8" as const,
-  },
-  /** PII / personal-info token classifier. Tags spans like EMAIL, PHONE,
-   *  CREDITCARD, ADDRESS, SOCIALNUM, etc. Used to redact distill-corpus
-   *  rows BEFORE they hit a public HF repo or get pushed to R2. */
-  pii: {
-    task: "token-classification",
-    model: "Xenova/piiranha-v1-detect-personal-information",
-    dtype: "q8" as const,
-  },
-  /** Zero-shot text classifier — supply any candidate labels at call time.
-   *  Used by the orchestrator to route messages by topic ("code", "math",
-   *  "personal", "creative", "factual") and pick the right system prompt
-   *  + connector subset without training a separate classifier per axis. */
-  zeroShot: {
-    task: "zero-shot-classification",
-    model: "Xenova/nli-deberta-v3-xsmall",
-    dtype: "q8" as const,
-  },
-  /** Abstractive summariser (DistilBART trained on CNN/DM). Replaces the
-   *  LLM call in lib/threads/summary.ts so long-thread rolling summaries
-   *  are free of cloud quota cost. ~150 MB Q8; only loaded when a thread
-   *  actually crosses the summarisation interval. */
-  summarizer: {
-    task: "summarization",
-    model: "Xenova/distilbart-cnn-6-6",
-    dtype: "q8" as const,
-  },
-} satisfies Record<string, ModelSpec>;
+  reranker: { model: "Xenova/ms-marco-MiniLM-L-12-v2" },
+  sentiment: { model: "Xenova/twitter-roberta-base-sentiment-latest" },
+  ner: { model: "Xenova/bert-base-NER" },
+  toxicity: { model: "Xenova/toxic-bert" },
+  pii: { model: "Xenova/piiranha-v1-detect-personal-information" },
+  zeroShot: { model: "Xenova/nli-deberta-v3-xsmall" },
+  summarizer: { model: "Xenova/distilbart-cnn-6-6" },
+} as const;
 
-/** Convenience helpers — each returns null on failure, never throws. */
-export async function rerankerPipeline() {
-  return getPipeline(MODELS.reranker);
-}
-export async function sentimentPipeline() {
-  return getPipeline(MODELS.sentiment);
-}
-export async function nerPipeline() {
-  return getPipeline(MODELS.ner);
-}
-export async function toxicityPipeline() {
-  return getPipeline(MODELS.toxicity);
-}
-export async function piiPipeline() {
-  return getPipeline(MODELS.pii);
-}
-export async function zeroShotPipeline() {
-  return getPipeline(MODELS.zeroShot);
-}
-export async function summarizerPipeline() {
-  return getPipeline(MODELS.summarizer);
-}
+// Suppress unused-import warning while we keep the logger ready for future
+// telemetry on sidecar call failures.
+void log;

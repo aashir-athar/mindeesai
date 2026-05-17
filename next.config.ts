@@ -6,7 +6,10 @@
  *  - `ppr` (Partial Prerendering): serve the static shell instantly, stream dynamic chat in.
  *  - `serverActions.bodySizeLimit`: chat uploads (images, audio) can exceed the 1MB default.
  *  - `images.remotePatterns`: avatars + research thumbnails come from arbitrary hosts.
- *  - `webpack`: silence the `node:` warning that `@lancedb/lancedb` emits in Edge bundles.
+ *  - Native modules: `@lancedb/lancedb`, `onnxruntime-node`, and
+ *    `@huggingface/transformers` all moved to the sidecar service
+ *    (scripts/sidecar/). The main app no longer bundles them, so the
+ *    Cloudflare Workers build can succeed.
  */
 import type { NextConfig } from "next";
 
@@ -30,8 +33,6 @@ const config: NextConfig = {
       { protocol: "https", hostname: "**" }, // research thumbnails come from anywhere
     ],
   },
-  // LanceDB is server-only; never let it leak into client bundles
-  serverExternalPackages: ["@lancedb/lancedb", "apache-arrow"],
   // Headers shipped on every response
   async headers() {
     return [

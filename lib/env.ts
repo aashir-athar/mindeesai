@@ -95,6 +95,18 @@ export const env = {
   ENABLE_SELF_REFLECTION: bool("ENABLE_SELF_REFLECTION", true),
   ENABLE_CONNECTOR_SANDBOX: bool("ENABLE_CONNECTOR_SANDBOX", true),
   ENABLE_VISION: bool("ENABLE_VISION", false),
+
+  /**
+   * Sidecar service — hosts LanceDB + transformers.js on HF Spaces because
+   * Cloudflare Workers can't load native .node binaries. When SIDECAR_URL
+   * is unset the main app falls back to in-process native execution (the
+   * legacy code path, only works on Node runtimes — local dev + Oracle VM
+   * + HF Spaces direct deploy).
+   *
+   * On Cloudflare Workers, SIDECAR_URL MUST be set.
+   */
+  SIDECAR_URL: str("SIDECAR_URL"),
+  SIDECAR_AUTH_TOKEN: str("SIDECAR_AUTH_TOKEN"),
 } as const;
 
 /** Throw early if required env is missing in production. */

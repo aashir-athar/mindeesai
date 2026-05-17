@@ -1,38 +1,33 @@
 /**
  * Embedding abstraction.
  *
- * Default path: hit Ollama's `/api/embed` with `DEFAULT_EMBED_MODEL`.
- * Fallback: lazy-load `@huggingface/transformers` and run BGE-small in-process.
+ * Priority order:
+ *   1. Sidecar (`SIDECAR_URL`) — production path. Runs BGE-small on HF Spaces.
+ *   2. Ollama at `OLLAMA_BASE_URL` — local-dev path for users running Ollama.
+ *   3. Zero vector — last-resort fallback so callers never throw.
  *
- * The fallback adds ~50MB of model download on first call, so we only reach for
- * it when Ollama is genuinely unreachable.
+ * The legacy in-process transformers.js path is gone: BGE-small now lives
+ * exclusively in the sidecar so Cloudflare Workers can deploy without native
+ * binaries. For local dev without a sidecar, run `npm --prefix
+ * scripts/sidecar start` in a side terminal and set `SIDECAR_URL=http://localhost:7860`.
  */
 
 import { env } from "@/lib/env";
 import { createLogger } from "@/lib/logger";
+import { sidecarEmbed, isSidecarConfigured } from "@/lib/sidecar/client";
 
 const log = createLogger("embeddings");
 
-let transformersEmbedderPromise: Promise<(text: string) => Promise<number[]>> | null = null;
+const EMBED_DIM = 384;
 
-async function loadTransformersEmbedder() {
-  if (transformersEmbedderPromise) return transformersEmbedderPromise;
-  transformersEmbedderPromise = (async () => {
-    log.info("Loading transformers.js BGE embedder (one-time download)…");
-    const { pipeline } = await import("@huggingface/transformers");
-    // q8 quantized — ~3× smaller download, ~2× faster cold-start, negligible
-    // quality loss on the 384-dim BGE small model. The retrieval ranking
-    // stays effectively identical for short-text recall workloads.
-    const extractor = await pipeline("feature-extraction", "Xenova/bge-small-en-v1.5", {
-      dtype: "q8",
-    });
-    return async (text: string): Promise<number[]> => {
-      const out = await extractor(text, { pooling: "mean", normalize: true });
-      // out.data is a Float32Array of length 384
-      return Array.from(out.data as Float32Array);
-    };
-  })();
-  return transformersEmbedderPromise;
+let warnedNoBackend = false;
+function warnNoBackend() {
+  if (warnedNoBackend) return;
+  warnedNoBackend = true;
+  log.warn(
+    "no embedding backend reachable (sidecar unset, Ollama unreachable) — returning zero vectors. " +
+    "Set SIDECAR_URL or start a local sidecar.",
+  );
 }
 
 async function embedViaOllama(text: string): Promise<number[] | null> {
@@ -41,8 +36,6 @@ async function embedViaOllama(text: string): Promise<number[] | null> {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ model: env.DEFAULT_EMBED_MODEL, input: text }),
-      // Short timeout — on Vercel Ollama is unreachable, and we don't want
-      // to burn 15s on every embed call only to fall back to local.
       signal: AbortSignal.timeout(2_500),
     });
     if (!res.ok) return null;
@@ -53,28 +46,32 @@ async function embedViaOllama(text: string): Promise<number[] | null> {
   }
 }
 
-/** Embed a single string. Never throws — returns a zero vector on total failure. */
+/** Embed a single string. Never throws. Returns zero vector on total failure. */
 export async function embed(text: string): Promise<number[]> {
-  // On Vercel, Ollama is unreachable. Skip the round-trip + 2.5s timeout
-  // entirely and go straight to the in-process BGE embedder. Local dev
-  // (where Ollama might be running on localhost:11434) still tries it first.
-  if (process.env.VERCEL !== "1") {
+  if (isSidecarConfigured()) {
+    const out = await sidecarEmbed(text);
+    if (out) return out;
+  }
+
+  // Local dev fallback: Ollama on localhost. Skip on Cloudflare Workers
+  // since fetch to localhost won't reach anything anyway.
+  if (process.env.VERCEL !== "1" && process.env.CF_PAGES !== "1") {
     const ollamaResult = await embedViaOllama(text);
     if (ollamaResult) return ollamaResult;
   }
 
-  const fallback = await loadTransformersEmbedder();
-  return fallback(text);
+  warnNoBackend();
+  return new Array(EMBED_DIM).fill(0);
 }
 
-/** Embed many strings, bounded concurrency. */
+/** Embed many strings sequentially (preserves order). */
 export async function embedMany(texts: string[]): Promise<number[][]> {
   const out: number[][] = [];
   for (const t of texts) out.push(await embed(t));
   return out;
 }
 
-/** Cosine similarity. Both vectors must be the same length. */
+/** Cosine similarity. */
 export function cosine(a: number[], b: number[]): number {
   if (a.length !== b.length || a.length === 0) return 0;
   let dot = 0;

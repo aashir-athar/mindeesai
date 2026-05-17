@@ -157,6 +157,14 @@ export async function ensureLanceDBReady(): Promise<void> {
   if (hydratedOnce) return;
   hydratedOnce = true;
 
+  // When the sidecar handles LanceDB (Cloudflare Workers deploy or any
+  // SIDECAR_URL-configured runtime), the main app neither owns local
+  // LanceDB files nor can it write to disk. Skip the hydration dance.
+  if (process.env.SIDECAR_URL) {
+    log.info("persistence: SIDECAR_URL set — skipping local LanceDB hydration (sidecar owns it)");
+    return;
+  }
+
   await mkdir(LANCEDB_PATH, { recursive: true });
   await mkdir(DATA_DIR, { recursive: true });
 

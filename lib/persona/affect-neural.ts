@@ -2,20 +2,19 @@
  * Neural emotion classifier — drop-in augmentation for the rule-based
  * AffectSignal.
  *
- * Uses @huggingface/transformers (a.k.a. transformers.js — Xenova's port),
- * which runs ONNX-quantised models entirely in the Node runtime. No GPU
- * required, no external service, completely FREE.
+ * Previously ran `Xenova/emotion-english-distilroberta-base` in-process via
+ * transformers.js. That dependency is gone (Cloudflare Workers can't load
+ * the native binary). To restore the 7-class emotion signal end-to-end,
+ * the sidecar would need a dedicated /classify task for the emotion model.
  *
- * Model: ``Xenova/emotion-english-distilroberta-base``
- * 7-class output: anger / disgust / fear / joy / neutral / sadness / surprise.
+ * For now, `readNeuralEmotion` always returns `null`, which makes the
+ * existing graceful-fallback path in callers do the right thing: the
+ * rule-based cues + Twitter-sentiment + toxicity already cover the bulk
+ * of the signal, and `blendNeuralIntoCues` is a no-op on null.
  *
- * The model + tokenizer is ~83MB compressed. Lazy-loaded on first use so
- * cold starts that never need emotion classification don't pay for it.
- * Subsequent calls reuse the cached pipeline (~5-15ms on modern CPU).
- *
- * On any failure (model fetch blocked, OOM on cold serverless, etc.) the
- * caller falls back to the rule-based AffectSignal unchanged. Never blocks
- * the response path.
+ * To re-enable: add a `"emotion"` task to the sidecar (scripts/sidecar/),
+ * point it at `Xenova/emotion-english-distilroberta-base`, then swap the
+ * stub below for a `sidecarClassify({ task: "emotion", text })` call.
  */
 
 import { createLogger } from "@/lib/logger";
@@ -37,61 +36,12 @@ export interface NeuralEmotionRead {
   durationMs: number;
 }
 
-type Classifier = (input: string, opts?: { topk?: number }) => Promise<Array<{ label: string; score: number }>>;
-
-let classifierP: Promise<Classifier | null> | null = null;
-
-async function getClassifier(): Promise<Classifier | null> {
-  if (classifierP) return classifierP;
-  classifierP = (async () => {
-    try {
-      const { pipeline } = await import("@huggingface/transformers");
-      log.info("loading emotion classifier (lazy, one-time)...");
-      const clf = (await pipeline(
-        "text-classification",
-        "Xenova/emotion-english-distilroberta-base",
-        { dtype: "q8" },
-      )) as unknown as Classifier;
-      log.info("emotion classifier ready");
-      return clf;
-    } catch (e) {
-      log.warn("could not load emotion classifier — falling back to rule-based only", e);
-      return null;
-    }
-  })();
-  return classifierP;
-}
-
 /**
- * Run the neural classifier over a single user message. Returns null on
- * any failure (caller should fall back to rule-based affect signal).
+ * STUB: returns null until the sidecar exposes an "emotion" classify task.
+ * Callers already handle null via the rule-based + sentiment fallback.
  */
-export async function readNeuralEmotion(text: string, timeoutMs = 2500): Promise<NeuralEmotionRead | null> {
-  const trimmed = text.trim();
-  if (!trimmed || trimmed.length < 2) return null;
-  const start = performance.now();
-  try {
-    const clf = await getClassifier();
-    if (!clf) return null;
-    const result = (await Promise.race([
-      clf(trimmed.slice(0, 512), { topk: 7 }),
-      new Promise<null>((_, rej) => setTimeout(() => rej(new Error("emotion classify timeout")), timeoutMs)),
-    ])) as Array<{ label: string; score: number }> | null;
-    if (!result || !Array.isArray(result)) return null;
-
-    const scores = {
-      anger: 0, disgust: 0, fear: 0, joy: 0, neutral: 0, sadness: 0, surprise: 0,
-    } as Record<NeuralEmotion, number>;
-    for (const r of result) {
-      const label = r.label.toLowerCase() as NeuralEmotion;
-      if (label in scores) scores[label] = r.score;
-    }
-    const top = (Object.entries(scores).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "neutral") as NeuralEmotion;
-    return { top, scores, durationMs: performance.now() - start };
-  } catch (e) {
-    log.warn("neural emotion read failed", e);
-    return null;
-  }
+export async function readNeuralEmotion(_text: string, _timeoutMs?: number): Promise<NeuralEmotionRead | null> {
+  return null;
 }
 
 /**

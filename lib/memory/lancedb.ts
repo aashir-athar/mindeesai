@@ -1,135 +1,94 @@
 /**
- * LanceDB client + table accessors.
+ * Memory client. Public API unchanged from the legacy in-process LanceDB
+ * implementation — every consumer (17 files) keeps working without edits.
  *
- * LanceDB is embedded — there is no server. The database is a directory on disk
- * (`LANCEDB_PATH`). This gives us:
- *   - Zero-config persistence in dev
- *   - Trivial portability (zip the folder, you have a backup)
- *   - Fast vector + scalar search in the same query
+ * Internally this is now a thin HTTP shim that delegates to the sidecar
+ * service (scripts/sidecar/, hosted on HF Spaces). LanceDB binaries no
+ * longer ship in the main app's deploy because Cloudflare Workers can't
+ * load them.
  *
- * Tables:
- *   memories  — every embedded utterance from any conversation
- *   insights  — promoted high-confidence reflections
- *   research  — embedded web-research passages
- *
- * Note: this module is server-only. Importing it from a client component will
- * blow up — `next.config.ts` declares `@lancedb/lancedb` as a server-external
- * package to make this explicit.
+ * When SIDECAR_URL is unset, every call returns empty / no-op with a
+ * one-time warning. Set SIDECAR_URL + SIDECAR_AUTH_TOKEN to enable
+ * memory (required for Workers; recommended elsewhere).
  */
 
-import path from "node:path";
-import { env } from "@/lib/env";
-import { embed } from "@/lib/embeddings";
+import {
+  isSidecarConfigured,
+  sidecarRecall,
+  sidecarRecallInsights,
+  sidecarRemember,
+  sidecarPromoteInsights,
+} from "@/lib/sidecar/client";
 import { createLogger } from "@/lib/logger";
 import type { MemoryRecord, RetrievalHit } from "@/lib/types";
 
-const log = createLogger("lancedb");
+const log = createLogger("memory");
 
-type LancedbModule = typeof import("@lancedb/lancedb");
-type LanceConnection = Awaited<ReturnType<LancedbModule["connect"]>>;
-
-let dbPromise: Promise<{
-  connect: LanceConnection;
-  lib: LancedbModule;
-}> | null = null;
-
-async function getDb() {
-  if (dbPromise) return dbPromise;
-  dbPromise = (async () => {
-    const { ensureLanceDBReady } = await import("./persistence");
-    await ensureLanceDBReady();
-    const lib = await import("@lancedb/lancedb");
-    const dir = path.resolve(env.LANCEDB_PATH);
-    log.info(`opening LanceDB @ ${dir}`);
-    const connect = await lib.connect(dir);
-    return { connect, lib };
-  })();
-  return dbPromise;
+let warnedMissingSidecar = false;
+function warnOnce() {
+  if (warnedMissingSidecar) return;
+  warnedMissingSidecar = true;
+  log.warn(
+    "SIDECAR_URL not configured — memory writes/reads are no-ops. " +
+    "Run `npm --prefix scripts/sidecar start` locally or set SIDECAR_URL in env.",
+  );
 }
 
-async function getOrCreateTable(name: "memories" | "insights" | "research", sample: Record<string, unknown>) {
-  const { connect } = await getDb();
-  const names = await connect.tableNames();
-  if (names.includes(name)) {
-    return connect.openTable(name);
-  }
-  log.info(`creating table ${name}`);
-  return connect.createTable(name, [sample], { mode: "create" });
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// public API
-// ─────────────────────────────────────────────────────────────────────────────
-
-/** Insert a memory. Embeds the text if no vector was supplied. */
+/** Insert a memory. Embeds happen inside the sidecar. */
 export async function rememberMany(records: MemoryRecord[]): Promise<void> {
   if (records.length === 0) return;
-  // Embed any record missing a vector
-  for (const r of records) {
-    if (!r.vector) r.vector = await embed(r.text);
+  if (!isSidecarConfigured()) {
+    warnOnce();
+    return;
   }
-  const tbl = await getOrCreateTable("memories", sampleRecord(records[0]!));
-  await tbl.add(records);
-  log.debug(`stored ${records.length} memories`);
+  await sidecarRemember({ records, table: "memories" });
 }
 
 /** Top-K retrieval over the memories table. */
 export async function recall(query: string, k = 8, threadId?: string): Promise<RetrievalHit[]> {
-  const vec = await embed(query);
-  const tbl = await getOrCreateTable("memories", sampleRecord({ text: "", id: "", createdAt: "" }));
-  const builder = tbl.search(vec).limit(k);
-  if (threadId) builder.where(`threadId = '${threadId.replace(/'/g, "''")}'`);
-  const results = (await builder.toArray()) as Array<MemoryRecord & { _distance: number }>;
-  return results.map((r) => ({ ...r, score: 1 - r._distance }));
-}
-
-/** Top-K retrieval over the insights table (promoted reflections). */
-export async function recallInsights(query: string, k = 5): Promise<RetrievalHit[]> {
-  const vec = await embed(query);
-  try {
-    const tbl = await getOrCreateTable("insights", sampleRecord({ text: "", id: "", createdAt: "" }));
-    const results = (await tbl.search(vec).limit(k).toArray()) as Array<MemoryRecord & { _distance: number }>;
-    return results.map((r) => ({ ...r, score: 1 - r._distance }));
-  } catch (e) {
-    log.warn("recallInsights failed", e);
+  if (!isSidecarConfigured()) {
+    warnOnce();
     return [];
   }
+  const hits = await sidecarRecall({ query, k, threadId, table: "memories" });
+  return (hits as RetrievalHit[] | null) ?? [];
+}
+
+/** Top-K retrieval over the insights table. */
+export async function recallInsights(query: string, k = 5): Promise<RetrievalHit[]> {
+  if (!isSidecarConfigured()) {
+    warnOnce();
+    return [];
+  }
+  const hits = await sidecarRecallInsights({ query, k });
+  return (hits as RetrievalHit[] | null) ?? [];
 }
 
 /** Insert promoted insights. */
 export async function promoteInsights(records: MemoryRecord[]): Promise<void> {
   if (records.length === 0) return;
-  for (const r of records) {
-    if (!r.vector) r.vector = await embed(r.text);
-    r.source = "insight";
+  if (!isSidecarConfigured()) {
+    warnOnce();
+    return;
   }
-  const tbl = await getOrCreateTable("insights", sampleRecord(records[0]!));
-  await tbl.add(records);
-  log.info(`promoted ${records.length} insights`);
+  await sidecarPromoteInsights({ records, table: "insights" });
 }
 
 /** Health check used at bootstrap. */
 export async function lancedbHealth(): Promise<{ ok: boolean; tables: string[] }> {
-  try {
-    const { connect } = await getDb();
-    const tables = await connect.tableNames();
-    return { ok: true, tables };
-  } catch (e) {
-    log.error("health failed", e);
+  if (!isSidecarConfigured()) {
     return { ok: false, tables: [] };
   }
-}
-
-function sampleRecord(r: Partial<MemoryRecord>): MemoryRecord {
-  // Provides LanceDB with a typed sample so it can infer schema on table creation.
-  return {
-    id: r.id ?? "sample",
-    text: r.text ?? "",
-    vector: r.vector ?? new Array(384).fill(0),
-    threadId: r.threadId ?? "",
-    role: r.role ?? "user",
-    tags: r.tags ?? [],
-    source: r.source ?? "conversation",
-    createdAt: r.createdAt ?? new Date().toISOString(),
-  };
+  // The sidecar's /health includes lancedb status; fetch it directly.
+  try {
+    const res = await fetch(`${process.env.SIDECAR_URL?.replace(/\/+$/, "")}/health`, {
+      signal: AbortSignal.timeout(3_000),
+    });
+    if (!res.ok) return { ok: false, tables: [] };
+    const data = (await res.json()) as { lancedb?: { ok: boolean; tables: string[] } };
+    return data.lancedb ?? { ok: false, tables: [] };
+  } catch (e) {
+    log.warn("health check failed", e);
+    return { ok: false, tables: [] };
+  }
 }

@@ -26,7 +26,7 @@
  * learning the email itself.
  */
 
-import { piiPipeline } from "@/lib/ml/transformers-pool";
+import { sidecarPii, isSidecarConfigured } from "@/lib/sidecar/client";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("pii-guard");
@@ -91,35 +91,18 @@ type TokenClassResult = Array<{
 }>;
 
 async function mlPiiSpans(text: string): Promise<PiiSpan[]> {
-  const pl = await Promise.race([
-    piiPipeline(),
-    new Promise<null>((res) => setTimeout(() => res(null), 2000)),
-  ]);
-  if (!pl) return [];
+  // Route the ML pass through the sidecar — piiranha lives there now.
+  // When the sidecar isn't configured (local dev without sidecar), skip
+  // the ML pass entirely and the regex backstop handles it.
+  if (!isSidecarConfigured()) return [];
 
   try {
-    // Run with aggregation strategy so multi-token entities collapse.
-    const raw = (await pl(text, { aggregation_strategy: "simple" } as unknown as object)) as unknown as TokenClassResult;
-    if (!Array.isArray(raw)) return [];
-    const spans: PiiSpan[] = [];
-    for (const r of raw) {
-      const score = r.score ?? 0;
-      if (score < PII_THRESHOLD) continue;
-      const tag = (r.entity_group ?? r.entity ?? "").toUpperCase();
-      if (!tag || tag === "O") continue;
-      // Spec-shape: piiranha returns entity tags like "EMAIL", "PHONE_NUMBER", etc.
-      // Normalise into lowercase short labels.
-      const type = normaliseTag(tag);
-      if (!type) continue;
-      const start = r.start ?? 0;
-      const end = r.end ?? start;
-      if (end > start && end <= text.length) {
-        spans.push({ type, start, end, score });
-      }
-    }
-    return spans;
+    const out = await sidecarPii(text, { timeoutMs: 2_000 });
+    if (!out) return [];
+    // Pre-filter: server already enforces threshold, but be defensive.
+    return out.spans.filter((s) => s.score >= PII_THRESHOLD);
   } catch (e) {
-    log.warn("ML PII inference failed", e);
+    log.warn("ML PII via sidecar failed", e);
     return [];
   }
 }
