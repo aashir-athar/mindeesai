@@ -15,6 +15,10 @@ import type { NextConfig } from "next";
 
 const config: NextConfig = {
   reactStrictMode: true,
+  // OpenNext (used for Cloudflare Workers deploy) requires Next.js's
+  // standalone output mode — it reads `.next/standalone/.next/server/...`
+  // artifacts when bundling the Worker.
+  output: "standalone",
   // reactCompiler moved out of `experimental` in Next 16; leaving it off here so
   // the build is portable across plain Next and the @next/babel-plugin-react-compiler
   // setup. Enable later via a top-level `reactCompiler: true` once stable.

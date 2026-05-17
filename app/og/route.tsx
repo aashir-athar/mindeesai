@@ -5,7 +5,10 @@
 
 import { ImageResponse } from "next/og";
 
-export const runtime = "edge";
+// `runtime = "edge"` was removed for the Cloudflare Workers deploy.
+// @opennextjs/cloudflare doesn't bundle edge-runtime routes into the
+// main Worker — they'd need a separate Worker, which we don't have set
+// up. The default Node runtime handles ImageResponse fine.
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
 
