@@ -1,0 +1,27 @@
+{
+  "name": "mindeesai-sidecar",
+  "version": "0.1.0",
+  "description": "Native-binary ML and vector sidecar for MindeesAI. Runs LanceDB + transformers.js on HF Spaces Docker; called by the main Cloudflare Workers deploy via HTTP.",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "start": "tsx src/server.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "^4.2.0",
+    "@lancedb/lancedb": "^0.27.2",
+    "apache-arrow": "^18.1.0",
+    "express": "^4.21.2",
+    "tsx": "^4.20.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.4",
+    "@types/node": "^25.7.0",
+    "typescript": "^6.0.3"
+  }
+}
