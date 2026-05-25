@@ -78,7 +78,6 @@ model-index:
 [![Status](https://img.shields.io/badge/status-actively_training-brightgreen.svg)](https://huggingface.co/aashir-athar/mindeesai-base/tree/kaggle-weekly)
 [![Cost](https://img.shields.io/badge/infra%20cost-%240%2Fmonth-success.svg)](#deployment--infrastructure)
 
-[**Try the live demo**](https://mindeesai.0032ksa.workers.dev) ·
 [**Source code**](https://github.com/aashir-athar/mindeesai) ·
 [**Inference sidecar**](https://huggingface.co/spaces/aashir-athar/mindeesai-sidecar) ·
 [**Branches**](#available-revisions-branches)
@@ -294,13 +293,13 @@ A live **8-dimensional mood tensor** evolves each turn:
 | Calm | 0–1 | Steadies tone on tense turns |
 | Confidence | 0–1 | Modulates hedging language |
 
-Mood is exposed at [`/api/mood`](https://mindeesai.0032ksa.workers.dev/api/mood) on the live deployment. It is fed into every generation step as part of the persona signal and persisted in [Cloudflare R2](https://developers.cloudflare.com/r2/) between turns.
+Mood is exposed at `/api/mood` on any active deployment. It is fed into every generation step as part of the persona signal and persisted in [Cloudflare R2](https://developers.cloudflare.com/r2/) between turns.
 
 ---
 
 ## Self-Improvement Loop
 
-A 30-minute cron triggers `/api/cron/self-improve` on the live deployment, which runs the following pipeline:
+A 30-minute cron triggers `/api/cron/self-improve` on any active deployment, which runs the following pipeline:
 
 1. **Reflect** — read the most recent chat turns from R2.
 2. **Extract** — distill new instruction / response pairs into `data/distill-corpus.jsonl`.
@@ -336,7 +335,7 @@ Architecture detail at [`docs/CLOUDFLARE_HF_DEPLOY.md`](https://github.com/aashi
 | Use case | Suitability | Notes |
 |---|---|---|
 | Educational / research use | **Yes** | Primary intended use. Architecture, training code, recipes all open. |
-| Personal assistant prototype | **Yes** | The live demo runs a working version. |
+| Personal assistant prototype | **Yes** | The full self-hostable stack ships in the source repo. |
 | Studying small-model behavior | **Yes** | Comparable to SmolLM / TinyLlama for under-1B research. |
 | Production user-facing applications | **No, at this size** | Use a larger model (Llama-3.3-70B, Claude, etc.) via the LLM router. Mindees Native is reserved for cases where 280M is genuinely sufficient. |
 | Safety-critical decision making | **No** | This is a research-stage model with limited evaluation. |
@@ -410,7 +409,7 @@ MindeesAI builds on the open work of many upstream projects. Sincere thanks to:
 - **Author:** Aashir Athar
 - **GitHub:** [@aashir-athar](https://github.com/aashir-athar)
 - **Repository:** [github.com/aashir-athar/mindeesai](https://github.com/aashir-athar/mindeesai)
-- **Live demo:** [mindeesai.0032ksa.workers.dev](https://mindeesai.0032ksa.workers.dev)
+- **Inference sidecar:** [aashir-athar/mindeesai-sidecar](https://huggingface.co/spaces/aashir-athar/mindeesai-sidecar)
 - **Issues:** [GitHub Issues](https://github.com/aashir-athar/mindeesai/issues)
 
 <div align="center">
